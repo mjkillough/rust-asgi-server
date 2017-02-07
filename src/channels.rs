@@ -23,7 +23,7 @@ impl RedisChannelLayer {
         let client = redis::Client::open("redis://127.0.0.1/").unwrap();
         let conn = client.get_connection().unwrap();
 
-        return RedisChannelLayer {
+        RedisChannelLayer {
             client: client,
             conn: conn,
             prefix: "asgi:".to_owned(),
@@ -36,15 +36,15 @@ impl RedisChannelLayer {
         let channel_key = self.prefix.to_owned() + channel;
 
         // TODO: Check the channel isn't full.
-        let _ : () = self.conn.set(&message_key, buf).unwrap();
-        let _ : () = self.conn.expire(&message_key, self.expiry).unwrap();
-        let _ : () = self.conn.rpush(&channel_key, message_key).unwrap();
-        let _ : () = self.conn.expire(&channel_key, self.expiry + 1).unwrap();
+        let _: () = self.conn.set(&message_key, buf).unwrap();
+        let _: () = self.conn.expire(&message_key, self.expiry).unwrap();
+        let _: () = self.conn.rpush(&channel_key, message_key).unwrap();
+        let _: () = self.conn.expire(&channel_key, self.expiry + 1).unwrap();
     }
 
     pub fn receive_one(&self, channel: &str) -> Vec<u8> {
         let channel_key = self.prefix.to_owned() + channel;
-        let (_, message_key) : ((), String) = self.conn.blpop(&channel_key, 0).unwrap();
+        let (_, message_key): ((), String) = self.conn.blpop(&channel_key, 0).unwrap();
         self.conn.get(&message_key).unwrap()
     }
 

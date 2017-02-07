@@ -109,7 +109,8 @@ impl AsgiDeserialize for Response {
                     for _ in 0..num_headers {
                         let tuple_len = rmp::decode::read_array_len(&mut cur)?;
                         assert!(tuple_len == 2);
-                        resp.headers.push((msgpack_read_bin(&mut cur)?, msgpack_read_bin(&mut cur)?))
+                        resp.headers
+                            .push((msgpack_read_bin(&mut cur)?, msgpack_read_bin(&mut cur)?))
                     }
                 }
                 _ => (), // don't care about unsupported members

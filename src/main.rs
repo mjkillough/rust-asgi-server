@@ -28,15 +28,14 @@ fn http_version_to_str(ver: HttpVersion) -> &'static str {
 fn get_path(uri: &RequestUri) -> &str {
     match uri {
         &RequestUri::AbsolutePath(ref path) => path,
-        _ => panic!("Don't know how to handle anything else!")
+        _ => panic!("Don't know how to handle anything else!"),
     }
 }
 
 fn munge_headers(req: &Request) -> Vec<(Vec<u8>, Vec<u8>)> {
-    req.headers.iter()
-        .map(|header| {
-            (header.name().to_owned().into_bytes(), header.value_string().into_bytes())
-        })
+    req.headers
+        .iter()
+        .map(|header| (header.name().to_owned().into_bytes(), header.value_string().into_bytes()))
         .collect()
 }
 
