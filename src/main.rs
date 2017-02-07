@@ -11,7 +11,7 @@ use hyper::status::StatusCode;
 use hyper::server::{Server, Request, Response};
 
 use asgi::{AsgiDeserialize, AsgiSerialize};
-use channels::RedisChannelLayer;
+use channels::{ChannelLayer, RedisChannelLayer};
 
 
 fn http_version_to_str(ver: HttpVersion) -> &'static str {

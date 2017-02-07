@@ -1,6 +1,6 @@
 extern crate redis;
 
-use super::random_string;
+use super::{random_string, ChannelLayer};
 use self::redis::Commands;
 
 
@@ -24,8 +24,10 @@ impl RedisChannelLayer {
             expiry: 60, // seconds
         }
     }
+}
 
-    pub fn send(&self, channel: &str, buf: &[u8]) {
+impl ChannelLayer for RedisChannelLayer {
+    fn send(&self, channel: &str, buf: &[u8]) {
         let message_key = self.prefix.to_owned() + "msg:" + &random_string(10);
         let channel_key = self.prefix.to_owned() + channel;
 
@@ -36,13 +38,13 @@ impl RedisChannelLayer {
         let _: () = self.conn.expire(&channel_key, self.expiry + 1).unwrap();
     }
 
-    pub fn receive_one(&self, channel: &str) -> Vec<u8> {
+    fn receive_one(&self, channel: &str) -> Vec<u8> {
         let channel_key = self.prefix.to_owned() + channel;
         let (_, message_key): ((), String) = self.conn.blpop(&channel_key, 0).unwrap();
         self.conn.get(&message_key).unwrap()
     }
 
-    pub fn new_channel(&self, pattern: &str) -> String {
+    fn new_channel(&self, pattern: &str) -> String {
         // TODO: Check pattern ends in ! or ?
         // TODO: Check the new channel doesn't already exist.
         pattern.to_owned() + &random_string(10)
