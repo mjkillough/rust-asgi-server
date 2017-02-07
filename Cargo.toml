@@ -1,0 +1,10 @@
+[package]
+name = "asgi-server"
+version = "0.1.0"
+authors = ["Michael Killough <michaeljkillough@gmail.com>"]
+
+[dependencies]
+hyper = "0.10"
+rmp = "0.8"
+redis = "0.8"
+rand = "*"
