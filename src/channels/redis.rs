@@ -1,13 +1,7 @@
-extern crate rand;
 extern crate redis;
 
-use self::rand::{thread_rng, Rng};
+use super::random_string;
 use self::redis::Commands;
-
-
-fn random_string(n: usize) -> String {
-    thread_rng().gen_ascii_chars().take(n).collect()
-}
 
 
 pub struct RedisChannelLayer {
