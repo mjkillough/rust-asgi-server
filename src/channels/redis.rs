@@ -4,6 +4,7 @@ extern crate rmp;
 extern crate serde;
 
 use std::io::Write;
+use std::time::Duration;
 
 use super::{random_string, ChannelLayer};
 
@@ -59,7 +60,7 @@ pub struct RedisChannelLayer {
     conn: redis::Connection,
 
     prefix: String,
-    expiry: usize, // seconds
+    expiry: Duration,
 }
 
 impl RedisChannelLayer {
@@ -71,7 +72,7 @@ impl RedisChannelLayer {
             client: client,
             conn: conn,
             prefix: "asgi:".to_owned(),
-            expiry: 60, // seconds
+            expiry: Duration::from_secs(60),
         }
     }
 }
@@ -83,11 +84,14 @@ impl ChannelLayer for RedisChannelLayer {
 
         let buf = msgpack_serialize(msg).unwrap();
 
+        let message_expiry = self.expiry.as_secs() as usize;
+        let channel_expiry = (self.expiry.as_secs() + 1) as usize;
+
         // TODO: Check the channel isn't full.
         let _: () = self.conn.set(&message_key, buf).unwrap();
-        let _: () = self.conn.expire(&message_key, self.expiry).unwrap();
+        let _: () = self.conn.expire(&message_key, message_expiry).unwrap();
         let _: () = self.conn.rpush(&channel_key, message_key).unwrap();
-        let _: () = self.conn.expire(&channel_key, self.expiry + 1).unwrap();
+        let _: () = self.conn.expire(&channel_key, channel_expiry).unwrap();
     }
 
     fn receive_one<D: Deserialize>(&self, channel: &str) -> D {
