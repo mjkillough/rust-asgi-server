@@ -1,7 +1,10 @@
 mod asgi;
 mod channels;
 
+#[macro_use]
+extern crate serde_derive;
 extern crate hyper;
+extern crate serde;
 
 use std::io::{Read, Write};
 
@@ -9,9 +12,11 @@ use hyper::version::HttpVersion;
 use hyper::uri::RequestUri;
 use hyper::status::StatusCode;
 use hyper::server::{Server, Request, Response};
+use serde::{Deserialize, Serialize};
+use serde::bytes::{ByteBuf, Bytes};
 
-use asgi::{AsgiDeserialize, AsgiSerialize};
 use channels::{ChannelLayer, RedisChannelLayer};
+use asgi::http;
 
 
 fn http_version_to_str(ver: HttpVersion) -> &'static str {
@@ -32,10 +37,15 @@ fn get_path(uri: &RequestUri) -> &str {
     }
 }
 
-fn munge_headers(req: &Request) -> Vec<(Vec<u8>, Vec<u8>)> {
+fn munge_headers(req: &Request) -> Vec<(ByteBuf, ByteBuf)> {
     req.headers
         .iter()
-        .map(|header| (header.name().to_owned().into_bytes(), header.value_string().into_bytes()))
+        .map(|header| {
+            // TODO: lower-case as per ASGI spec.
+            let name = header.name().to_owned().into_bytes();
+            let value = header.value_string().into_bytes(); // XXX extra alloc?
+            (ByteBuf::from(name), ByteBuf::from(value))
+        })
         .collect()
 }
 
@@ -54,24 +64,22 @@ fn hello(mut req: Request, mut res: Response) {
         path: path,
         query_string: "",
         headers: munge_headers(&req),
-        body: body,
+        body: Bytes::new(&body),
     };
-    let mut buf = Vec::new();
-    asgi_req.serialize(&mut buf).unwrap();
-
-    println!("{:?}", buf);
-
-    channels.send("http.request", &buf);
+    channels.send("http.request", &asgi_req);
 
     // throw away the result, just make sure it does not fail
     // println!("{:?}", buf);
 
-    let buf = channels.receive_one(&asgi_req.reply_channel);
-    let asgi_resp = asgi::http::Response::deserialize(&buf).unwrap();
+    let asgi_resp: asgi::http::Response = channels.receive_one(&asgi_req.reply_channel);
 
     *res.status_mut() = StatusCode::from_u16(asgi_resp.status);
     for (name, value) in asgi_resp.headers {
-        res.headers_mut().set_raw(String::from_utf8(name).unwrap(), vec![value])
+        // TODO: We may set_raw() multiple times for the same header. We should instead
+        // be collecting the duplicate in a values vec and calling set_raw() once.
+        let name = String::from_utf8(name.into()).unwrap();
+        let values = vec![value.into()];
+        res.headers_mut().set_raw(name, values);
     }
 
     let mut res = res.start().unwrap();
