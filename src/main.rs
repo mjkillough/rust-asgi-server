@@ -41,9 +41,11 @@ fn munge_headers(req: &Request) -> Vec<(ByteBuf, ByteBuf)> {
     req.headers
         .iter()
         .map(|header| {
-            // TODO: lower-case as per ASGI spec.
-            let name = header.name().to_owned().into_bytes();
-            let value = header.value_string().into_bytes(); // XXX extra alloc?
+            // ASGI spec states to lowercase ASCII characters in header names.
+            // We're save to use str.to_lowercase() (which lowercases non-ASCII)
+            // because the HTTP spec says header names must be ASCII.
+            let name = header.name().to_lowercase().into_bytes();
+            let value = header.value_string().into_bytes();
             (ByteBuf::from(name), ByteBuf::from(value))
         })
         .collect()
