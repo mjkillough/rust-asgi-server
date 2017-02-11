@@ -62,6 +62,8 @@ pub struct RedisChannelLayer {
     prefix: String,
     expiry: Duration,
     blpop_timeout: Duration,
+
+    lpopmany: redis::Script,
 }
 
 impl RedisChannelLayer {
@@ -69,12 +71,25 @@ impl RedisChannelLayer {
         let client = redis::Client::open("redis://127.0.0.1/").unwrap();
         let conn = client.get_connection().unwrap();
 
+        let lpopmany = redis::Script::new(r"
+            for keyCount = 1, #KEYS do
+                local result = redis.call('LPOP', KEYS[keyCount])
+                if result then
+                    return {KEYS[keyCount], result}
+                end
+            end
+            return nil
+        ");
+
         RedisChannelLayer {
             client: client,
             conn: conn,
+
             prefix: "asgi:".to_owned(),
             expiry: Duration::from_secs(60),
             blpop_timeout: Duration::from_secs(5),
+
+            lpopmany: lpopmany,
         }
     }
 }
@@ -104,32 +119,47 @@ impl ChannelLayer for RedisChannelLayer {
     }
 
     fn receive<D: Deserialize>(&self, channels: &[&str], block: bool) -> Option<(String, D)> {
-        // Only support blocking mode for now.
-        assert!(block);
-
         loop {
-            // Shuffle the channels, to avoid one from starving the others.
-            let mut channels: Vec<&str> = channels.to_vec();
+            let mut channels: Vec<String> = channels.iter()
+                .map(|channel| self.prefix.to_owned() + channel)
+                .collect();
+
+            // Prevent one channel from starving the others.
             shuffle(channels.as_mut_slice());
 
-            let mut cmd = redis::cmd("BLPOP");
-            for channel in channels {
-                cmd.arg(self.prefix.to_owned() + channel);
-            }
-            cmd.arg(self.blpop_timeout.as_secs());
-
-            let result: Option<(String, String)> = cmd.query(&self.conn).unwrap();
-            if let Some((channel_name, message_key)) = result {
-                let message: Option<Vec<u8>> = self.conn.get(&message_key).unwrap();
-                match message {
-                    Some(buf) => {
-                        // Remove prefix from returned channel name.
-                        let channel_name = channel_name[self.prefix.len()..].to_owned();
-                        return Some((channel_name, msgpack_deserialize(&buf).unwrap()))
-                    },
-                    // If the message has expired, move on to the next available channel.
-                    None => {}
+            let result: Option<(String, String)> = match block {
+                true => {
+                    let mut cmd = redis::cmd("BLPOP");
+                    for channel in channels {
+                        cmd.arg(channel);
+                    }
+                    cmd.arg(self.blpop_timeout.as_secs());
+                    cmd.query(&self.conn).unwrap()
                 }
+                false => {
+                    let mut script = self.lpopmany.prepare_invoke();
+                    for channel in channels {
+                        script.arg(channel);
+                    }
+                    script.invoke(&self.conn).unwrap()
+                }
+            };
+
+            match result {
+                Some((channel_name, message_key)) => {
+                    let message: Option<Vec<u8>> = self.conn.get(&message_key).unwrap();
+                    match message {
+                        Some(buf) => {
+                            // Remove prefix from returned channel name.
+                            let channel_name = channel_name[self.prefix.len()..].to_owned();
+                            return Some((channel_name, msgpack_deserialize(&buf).unwrap()))
+                        },
+                        // If the message has expired, move on to the next available channel.
+                        None => {}
+                    }
+                },
+                // If the channels didn't return any in the time available, return nothing.
+                None => return None
             }
         }
     }
