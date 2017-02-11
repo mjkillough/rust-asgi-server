@@ -6,7 +6,7 @@ extern crate serde;
 use std::io::Write;
 use std::time::Duration;
 
-use super::{random_string, ChannelLayer};
+use super::{random_string, shuffle, ChannelLayer};
 
 use self::redis::Commands;
 use self::rmp_serde::{Deserializer, Serializer};
@@ -61,6 +61,7 @@ pub struct RedisChannelLayer {
 
     prefix: String,
     expiry: Duration,
+    blpop_timeout: Duration,
 }
 
 impl RedisChannelLayer {
@@ -73,6 +74,7 @@ impl RedisChannelLayer {
             conn: conn,
             prefix: "asgi:".to_owned(),
             expiry: Duration::from_secs(60),
+            blpop_timeout: Duration::from_secs(5),
         }
     }
 }
@@ -99,6 +101,37 @@ impl ChannelLayer for RedisChannelLayer {
         let (_, message_key): ((), String) = self.conn.blpop(&channel_key, 0).unwrap();
         let message: Vec<u8> = self.conn.get(&message_key).unwrap();
         msgpack_deserialize(&message).unwrap()
+    }
+
+    fn receive<D: Deserialize>(&self, channels: &[&str], block: bool) -> Option<(String, D)> {
+        // Only support blocking mode for now.
+        assert!(block);
+
+        loop {
+            // Shuffle the channels, to avoid one from starving the others.
+            let mut channels: Vec<&str> = channels.to_vec();
+            shuffle(channels.as_mut_slice());
+
+            let mut cmd = redis::cmd("BLPOP");
+            for channel in channels {
+                cmd.arg(self.prefix.to_owned() + channel);
+            }
+            cmd.arg(self.blpop_timeout.as_secs());
+
+            let result: Option<(String, String)> = cmd.query(&self.conn).unwrap();
+            if let Some((channel_name, message_key)) = result {
+                let message: Option<Vec<u8>> = self.conn.get(&message_key).unwrap();
+                match message {
+                    Some(buf) => {
+                        // Remove prefix from returned channel name.
+                        let channel_name = channel_name[self.prefix.len()..].to_owned();
+                        return Some((channel_name, msgpack_deserialize(&buf).unwrap()))
+                    },
+                    // If the message has expired, move on to the next available channel.
+                    None => {}
+                }
+            }
+        }
     }
 
     fn new_channel(&self, pattern: &str) -> String {

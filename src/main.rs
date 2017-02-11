@@ -73,7 +73,8 @@ fn hello(mut req: Request, mut res: Response) {
     // throw away the result, just make sure it does not fail
     // println!("{:?}", buf);
 
-    let asgi_resp: asgi::http::Response = channels.receive_one(&asgi_req.reply_channel);
+    let (channel_name, asgi_resp): (String, asgi::http::Response) = channels.receive(&vec![asgi_req.reply_channel], true).unwrap();
+    println!("{}", channel_name);
 
     *res.status_mut() = StatusCode::from_u16(asgi_resp.status);
     for (name, value) in asgi_resp.headers {
