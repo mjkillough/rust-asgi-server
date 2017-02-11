@@ -61,7 +61,7 @@ impl Service for AsgiInterface {
         let body: Vec<u8> = vec![];
         let asgi_req = asgi::http::Request {
             reply_channel: &channels.new_channel("http.response!"),
-            http_version: &http_version_to_str(req.version()).to_owned(),
+            http_version: &http_version_to_str(req.version()),
             method: req.method().as_ref(),
             path: req.uri().path(),
             query_string: req.uri().query().unwrap_or(""),
