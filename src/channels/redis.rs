@@ -111,13 +111,6 @@ impl ChannelLayer for RedisChannelLayer {
         let _: () = self.conn.expire(&channel_key, channel_expiry).unwrap();
     }
 
-    fn receive_one<D: Deserialize>(&self, channel: &str) -> D {
-        let channel_key = self.prefix.to_owned() + channel;
-        let (_, message_key): ((), String) = self.conn.blpop(&channel_key, 0).unwrap();
-        let message: Vec<u8> = self.conn.get(&message_key).unwrap();
-        msgpack_deserialize(&message).unwrap()
-    }
-
     fn receive<D: Deserialize>(&self, channels: &[&str], block: bool) -> Option<(String, D)> {
         loop {
             let mut channels: Vec<String> = channels.iter()

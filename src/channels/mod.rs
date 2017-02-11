@@ -19,10 +19,6 @@ fn shuffle<T>(values: &mut [T]) {
 
 pub trait ChannelLayer {
     fn send<S: Serialize>(&self, channel: &str, msg: &S);
-    // ASGI spec actually calls for a `receive(channels, block=True)`, but
-    // I don't want to implement waiting on multiple channels or blocking
-    // just yet.
-    fn receive_one<D: Deserialize>(&self, channel: &str) -> D;
     fn receive<D: Deserialize>(&self,
                                channels: &[&str],
                                block: bool)
