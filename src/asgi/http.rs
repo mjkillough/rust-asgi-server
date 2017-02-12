@@ -20,9 +20,16 @@ pub struct Request<'a> {
     // It'd be nice if headers didn't have to own their byte-strings.
     pub headers: Vec<(ByteBuf, ByteBuf)>,
     pub body: Bytes<'a>,
-    /* pub body_channel: ?, */
+    pub body_channel: Option<&'a str>,
     /* pub client: ?, */
     /* pub server: ?, */
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestBodyChunk<'a> {
+    pub content: Bytes<'a>,
+    pub closed: bool,
+    pub more_content: bool,
 }
 
 
