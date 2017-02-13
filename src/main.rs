@@ -128,6 +128,25 @@ fn send_body_chunks(reply_channel: String,
         .boxed()
 }
 
+fn wait_for_response(reply_channel: String) -> BoxFuture<asgi::http::Response, hyper::Error> {
+    let channels = RedisChannelLayer::new();
+    let reply_channels = vec![&*reply_channel];
+    let (_, asgi_resp): (_, asgi::http::Response) = channels.receive(&reply_channels, true).unwrap();
+    futures::future::ok(asgi_resp).boxed()
+}
+
+fn send_response(asgi_resp: asgi::http::Response) -> BoxFuture<Response, hyper::Error> {
+    let mut resp = Response::new();
+    resp.set_status(StatusCode::from_u16(asgi_resp.status));
+    for (name, value) in asgi_resp.headers {
+        let name = String::from_utf8(name.into()).unwrap();
+        let value: Vec<u8> = value.into();
+        resp.headers_mut().set_raw(name, value);
+    }
+    let content: Vec<u8> = asgi_resp.content.into();
+    futures::future::ok(resp.with_body(content)).boxed()
+}
+
 
 impl Service for AsgiInterface {
     type Request = Request;
@@ -143,21 +162,8 @@ impl Service for AsgiInterface {
             .and_then(move |(chunk, body)| {
                 send_request(method, uri, version, headers, chunk, body)
             })
-            .and_then(|reply_channel| {
-                let channels = RedisChannelLayer::new();
-                let reply_channels = vec![&*reply_channel];
-                let (_, asgi_resp): (_, asgi::http::Response) = channels.receive(&reply_channels, true).unwrap();
-
-                let mut resp = Response::new();
-                resp.set_status(StatusCode::from_u16(asgi_resp.status));
-                for (name, value) in asgi_resp.headers {
-                    let name = String::from_utf8(name.into()).unwrap();
-                    let value: Vec<u8> = value.into();
-                    resp.headers_mut().set_raw(name, value);
-                }
-                let content: Vec<u8> = asgi_resp.content.into();
-                futures::future::ok(resp.with_body(content))
-            })
+            .and_then(wait_for_response)
+            .and_then(send_response)
             .boxed()
     }
 }
