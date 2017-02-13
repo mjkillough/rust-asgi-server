@@ -49,83 +49,59 @@ fn send_request(method: Method,
                 uri: Uri,
                 version: HttpVersion,
                 headers: Headers,
-                initial_chunk: Option<Chunk>,
-                body: Body)
+                body: Vec<u8>)
                 -> BoxFuture<String, hyper::Error> {
     let channels = RedisChannelLayer::new();
 
-    let initial_chunk = match initial_chunk {
-        Some(ref chunk) => Bytes::new(&chunk),
-        None => Bytes::new(&[0; 0]),
+    let chunk_size = 1024 * 1024 * 1024; // 1 MB
+    let mut chunks = body.chunks(chunk_size).peekable();
+    let initial_chunk = match chunks.next() {
+        Some(chunk) => chunk,
+        None => &[0; 0],
+    };
+    let body_channel = match chunks.len() > 0 {
+        true => Some(channels.new_channel("http.request.body?")),
+        false => None,
     };
 
-    let mut body = body.peekable();
-    let more_content = match body.peek() {
-        Ok(Async::Ready(None)) => false,
-        Ok(_) => true,
-        Err(e) => panic!("Unhandled error"),
-    };
-    let body_channel = match more_content {
-        true => channels.new_channel("http.request?"),
-        false => "".to_owned(),
-    };
-
+    // Send the initial chunk of the request to http.request. We must use an extra scope for this
+    // because otherwise we'll find reply_channel is borrowed for longer than necessary.
     let reply_channel = channels.new_channel("http.response!");
-    let asgi_req = asgi::http::Request {
-        reply_channel: &reply_channel,
-        http_version: &http_version_to_str(&version),
-        method: method.as_ref(),
-        path: uri.path(),
-        query_string: uri.query().unwrap_or(""),
-        headers: munge_headers(&headers),
-        body: initial_chunk,
-        body_channel: Some(&body_channel),
-    };
-
-    // TODO: Do this on a thread pool?
-    channels.send("http.request", &asgi_req);
-
-    if more_content {
-        futures::future::ok((reply_channel.clone())).boxed()
-    } else {
-        send_body_chunks(reply_channel.clone(), body_channel.clone(), body)
+    {
+        // TODO: make this async.
+        channels.send("http.request", &asgi::http::Request {
+            reply_channel: &reply_channel,
+            http_version: &http_version_to_str(&version),
+            method: method.as_ref(),
+            path: uri.path(),
+            query_string: uri.query().unwrap_or(""),
+            headers: munge_headers(&headers),
+            body: Bytes::from(initial_chunk),
+            // Dance to turn Option<String> to Option<&str>:
+            body_channel: body_channel.as_ref().map(String::as_ref),
+        });
     }
-}
 
-fn send_body_chunks(reply_channel: String,
-                    body_channel: String,
-                    body: Peekable<Body>)
-                    -> BoxFuture<String, hyper::Error> {
-    // TODO: Could we have just one future (and pass state through) if we did a .fold()?
-    let body_channel2 = body_channel.clone();
-    body
-        // Send each chunk in the body of the request, saying there's more to
-        // come, even if we're unsure. We'll send a final chunk with no content
-        // and more_content=false.
-        .for_each(move |chunk| {
-            let asgi_chunk = asgi::http::RequestBodyChunk {
-                content: Bytes::new(&chunk),
-                closed: false,
-                more_content: true,
-            };
-            let channels = RedisChannelLayer::new();
-            channels.send(&body_channel, &asgi_chunk);
+    // If the body of the request is over a certain size, then we must break it up and send each
+    // chunk separately on a per request http.request.body? channel. We must do some iterator
+    // dancing, as we must know which chunk is the last.
+    if let Some(body_channel) = body_channel {
+        loop {
+            match chunks.next() {
+                Some(chunk) => {
+                    // TODO: make this async.
+                    channels.send(&body_channel, &asgi::http::RequestBodyChunk {
+                        content: Bytes::from(chunk),
+                        closed: false,
+                        more_content: !chunks.peek().is_none(),
+                    });
+                }
+                None => break,
+            }
+        }
+    }
 
-            futures::future::ok(())
-         })
-         // Send final chunk with no content and more_content=false.
-        .and_then(move |_| {
-            let asgi_chunk = asgi::http::RequestBodyChunk {
-                content: Bytes::new(&[0; 0]),
-                closed: false,
-                more_content: false,
-            };
-            let channels = RedisChannelLayer::new();
-            channels.send(&body_channel2, &asgi_chunk);
-
-            futures::future::ok(reply_channel)
-        })
-        .boxed()
+    futures::future::ok(reply_channel).boxed()
 }
 
 fn wait_for_response(reply_channel: String) -> BoxFuture<asgi::http::Response, hyper::Error> {
@@ -157,10 +133,21 @@ impl Service for AsgiInterface {
     fn call(&self, req: Request) -> Self::Future {
         let (method, uri, version, headers, body) = req.deconstruct();
 
-        body.into_future()
-            .or_else(|(e, _)| futures::future::err(e))
-            .and_then(move |(chunk, body)| {
-                send_request(method, uri, version, headers, chunk, body)
+        // Wait for the entire body of the request to be in memory before proceeding. It feels like
+        // it would be nice to send each chunk over ASGI separately, but once Channels receives a
+        // http.request, it blocks while it waits for its body. Buffer the entire body here to
+        // avoid blocking in the sync back-end Channels worker processes.
+        body.collect()
+            .and_then(|body| {
+                // We get a Vec<Chunk> - flatten into a simple array of bytes. We could avoid the
+                // copies here if we made send_request smarter and have it correct re-chunk a
+                // Vec<Chunk> into chunks of the right size. (We have no control over how hyper chunks).
+                let body = body.iter()
+                    .fold(Vec::new(), |mut vec, chunk| { vec.extend_from_slice(&chunk); vec });
+                futures::future::ok(body)
+            })
+            .and_then(move |body| {
+                send_request(method, uri, version, headers, body)
             })
             .and_then(wait_for_response)
             .and_then(send_response)
