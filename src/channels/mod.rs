@@ -1,8 +1,5 @@
-extern crate rand;
-extern crate serde;
-
-use self::rand::{thread_rng, Rng};
-use self::serde::{Deserialize, Serialize};
+use rand::{thread_rng, Rng};
+use serde::{Deserialize, Serialize};
 
 pub mod redis;
 pub use self::redis::RedisChannelLayer;

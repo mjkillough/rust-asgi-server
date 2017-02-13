@@ -1,18 +1,17 @@
-extern crate redis;
-extern crate rmp_serde;
-extern crate rmp;
-extern crate serde;
-
 use std::io::Write;
 use std::time::Duration;
 
-use super::{random_string, shuffle, ChannelLayer};
+use redis;
+use redis::Commands;
+use rmp_serde::encode::VariantWriter;
+use rmp;
+use rmp::Marker;
+use rmp::encode::ValueWriteError;
+use rmp_serde;
+use serde;
+use serde::{Deserialize, Serialize};
 
-use self::redis::Commands;
-use self::rmp_serde::encode::VariantWriter;
-use self::rmp::Marker;
-use self::rmp::encode::ValueWriteError;
-use self::serde::{Deserialize, Serialize};
+use super::{random_string, shuffle, ChannelLayer};
 
 
 // asgi_redis expects msgpack map objects, which it'll deserialize to Python dicts.

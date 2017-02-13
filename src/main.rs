@@ -1,11 +1,12 @@
-mod asgi;
-mod channels;
-
+extern crate futures;
+extern crate hyper;
+extern crate rand;
+extern crate redis;
+extern crate rmp;
+extern crate rmp_serde;
+extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-extern crate hyper;
-extern crate serde;
-extern crate futures;
 
 use futures::{BoxFuture, Future, Stream};
 use hyper::{Headers, HttpVersion, Method, Uri};
@@ -14,6 +15,9 @@ use hyper::server::{Http, Service, Request, Response};
 use serde::bytes::{ByteBuf, Bytes};
 
 use channels::{ChannelLayer, RedisChannelLayer};
+
+mod asgi;
+mod channels;
 
 
 fn http_version_to_str(ver: &HttpVersion) -> &'static str {

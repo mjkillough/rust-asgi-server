@@ -1,5 +1,3 @@
-extern crate rmp;
-
 // We need to wrap Vec<u8>/&[u8] in this in order to make sure serde
 // serializes it as a byte string rather than a list of bytes.
 use serde::bytes::{ByteBuf, Bytes};
