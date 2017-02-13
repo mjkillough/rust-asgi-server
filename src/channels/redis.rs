@@ -68,6 +68,7 @@ impl RedisChannelLayer {
         let client = redis::Client::open("redis://127.0.0.1/").unwrap();
         let conn = client.get_connection().unwrap();
 
+        // This script comes from asgi_redis:
         let lpopmany = redis::Script::new(r"
             for keyCount = 1, #KEYS do
                 local result = redis.call('LPOP', KEYS[keyCount])
