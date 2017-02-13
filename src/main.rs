@@ -7,18 +7,13 @@ extern crate hyper;
 extern crate serde;
 extern crate futures;
 
-use std::io::{Read, Write};
-
-use futures::stream::Peekable;
-use futures::{Async, BoxFuture, Future, Stream};
-use hyper::{Body, Chunk, Headers, HttpVersion, Method, Uri};
+use futures::{BoxFuture, Future, Stream};
+use hyper::{Headers, HttpVersion, Method, Uri};
 use hyper::status::StatusCode;
 use hyper::server::{Http, Service, Request, Response};
-use serde::{Deserialize, Serialize};
 use serde::bytes::{ByteBuf, Bytes};
 
 use channels::{ChannelLayer, RedisChannelLayer};
-use asgi::http;
 
 
 fn http_version_to_str(ver: &HttpVersion) -> &'static str {

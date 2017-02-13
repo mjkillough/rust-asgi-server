@@ -9,7 +9,6 @@ use std::time::Duration;
 use super::{random_string, shuffle, ChannelLayer};
 
 use self::redis::Commands;
-use self::rmp_serde::{Deserializer, Serializer};
 use self::rmp_serde::encode::VariantWriter;
 use self::rmp::Marker;
 use self::rmp::encode::ValueWriteError;
@@ -56,7 +55,6 @@ fn msgpack_deserialize<D: Deserialize>(buf: &[u8]) -> Result<D, self::rmp_serde:
 
 
 pub struct RedisChannelLayer {
-    client: redis::Client,
     conn: redis::Connection,
 
     prefix: String,
@@ -82,7 +80,6 @@ impl RedisChannelLayer {
         ");
 
         RedisChannelLayer {
-            client: client,
             conn: conn,
 
             prefix: "asgi:".to_owned(),
