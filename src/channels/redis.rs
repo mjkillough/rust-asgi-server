@@ -142,14 +142,14 @@ impl ChannelLayer for RedisChannelLayer {
                         Some(buf) => {
                             // Remove prefix from returned channel name.
                             let channel_name = channel_name[self.prefix.len()..].to_owned();
-                            return Some((channel_name, msgpack_deserialize(&buf).unwrap()))
-                        },
+                            return Some((channel_name, msgpack_deserialize(&buf).unwrap()));
+                        }
                         // If the message has expired, move on to the next available channel.
                         None => {}
                     }
-                },
+                }
                 // If the channels didn't return any in the time available, return nothing.
-                None => return None
+                None => return None,
             }
         }
     }

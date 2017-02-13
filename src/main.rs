@@ -64,17 +64,18 @@ fn send_request(method: Method,
     let reply_channel = channels.new_channel("http.response!");
     {
         // TODO: make this async.
-        channels.send("http.request", &asgi::http::Request {
-            reply_channel: &reply_channel,
-            http_version: &http_version_to_str(&version),
-            method: method.as_ref(),
-            path: uri.path(),
-            query_string: uri.query().unwrap_or(""),
-            headers: munge_headers(&headers),
-            body: Bytes::from(initial_chunk),
-            // Dance to turn Option<String> to Option<&str>:
-            body_channel: body_channel.as_ref().map(String::as_ref),
-        });
+        channels.send("http.request",
+                      &asgi::http::Request {
+                          reply_channel: &reply_channel,
+                          http_version: &http_version_to_str(&version),
+                          method: method.as_ref(),
+                          path: uri.path(),
+                          query_string: uri.query().unwrap_or(""),
+                          headers: munge_headers(&headers),
+                          body: Bytes::from(initial_chunk),
+                          // Dance to turn Option<String> to Option<&str>:
+                          body_channel: body_channel.as_ref().map(String::as_ref),
+                      });
     }
 
     // If the body of the request is over a certain size, then we must break it up and send each
@@ -85,11 +86,12 @@ fn send_request(method: Method,
             match chunks.next() {
                 Some(chunk) => {
                     // TODO: make this async.
-                    channels.send(&body_channel, &asgi::http::RequestBodyChunk {
-                        content: Bytes::from(chunk),
-                        closed: false,
-                        more_content: !chunks.peek().is_none(),
-                    });
+                    channels.send(&body_channel,
+                                  &asgi::http::RequestBodyChunk {
+                                      content: Bytes::from(chunk),
+                                      closed: false,
+                                      more_content: !chunks.peek().is_none(),
+                                  });
                 }
                 None => break,
             }
@@ -102,7 +104,8 @@ fn send_request(method: Method,
 fn wait_for_response(reply_channel: String) -> BoxFuture<asgi::http::Response, hyper::Error> {
     let channels = RedisChannelLayer::new();
     let reply_channels = vec![&*reply_channel];
-    let (_, asgi_resp): (_, asgi::http::Response) = channels.receive(&reply_channels, true).unwrap();
+    let (_, asgi_resp): (_, asgi::http::Response) = channels.receive(&reply_channels, true)
+        .unwrap();
     futures::future::ok(asgi_resp).boxed()
 }
 

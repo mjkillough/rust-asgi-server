@@ -19,9 +19,6 @@ fn shuffle<T>(values: &mut [T]) {
 
 pub trait ChannelLayer {
     fn send<S: Serialize>(&self, channel: &str, msg: &S);
-    fn receive<D: Deserialize>(&self,
-                               channels: &[&str],
-                               block: bool)
-                               -> Option<(String, D)>;
+    fn receive<D: Deserialize>(&self, channels: &[&str], block: bool) -> Option<(String, D)>;
     fn new_channel(&self, pattern: &str) -> String;
 }
