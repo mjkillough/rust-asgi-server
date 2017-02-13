@@ -59,27 +59,28 @@ fn send_request(method: Method,
         None => &[0; 0],
     };
     let body_channel = match chunks.len() > 0 {
-        true => Some(channels.new_channel("http.request.body?")),
+        true => Some(channels.new_channel("http.request.body?").unwrap()),
         false => None,
     };
 
     // Send the initial chunk of the request to http.request. We must use an extra scope for this
     // because otherwise we'll find reply_channel is borrowed for longer than necessary.
-    let reply_channel = channels.new_channel("http.response!");
+    let reply_channel = channels.new_channel("http.response!").unwrap();
     {
         // TODO: make this async.
         channels.send("http.request",
-                      &asgi::http::Request {
-                          reply_channel: &reply_channel,
-                          http_version: &http_version_to_str(&version),
-                          method: method.as_ref(),
-                          path: uri.path(),
-                          query_string: uri.query().unwrap_or(""),
-                          headers: munge_headers(&headers),
-                          body: Bytes::from(initial_chunk),
-                          // Dance to turn Option<String> to Option<&str>:
-                          body_channel: body_channel.as_ref().map(String::as_ref),
-                      });
+                  &asgi::http::Request {
+                      reply_channel: &reply_channel,
+                      http_version: &http_version_to_str(&version),
+                      method: method.as_ref(),
+                      path: uri.path(),
+                      query_string: uri.query().unwrap_or(""),
+                      headers: munge_headers(&headers),
+                      body: Bytes::from(initial_chunk),
+                      // Dance to turn Option<String> to Option<&str>:
+                      body_channel: body_channel.as_ref().map(String::as_ref),
+                  })
+            .unwrap();
     }
 
     // If the body of the request is over a certain size, then we must break it up and send each
@@ -91,11 +92,12 @@ fn send_request(method: Method,
                 Some(chunk) => {
                     // TODO: make this async.
                     channels.send(&body_channel,
-                                  &asgi::http::RequestBodyChunk {
-                                      content: Bytes::from(chunk),
-                                      closed: false,
-                                      more_content: !chunks.peek().is_none(),
-                                  });
+                              &asgi::http::RequestBodyChunk {
+                                  content: Bytes::from(chunk),
+                                  closed: false,
+                                  more_content: !chunks.peek().is_none(),
+                              })
+                        .unwrap();
                 }
                 None => break,
             }
@@ -109,6 +111,7 @@ fn wait_for_response(reply_channel: String) -> BoxFuture<asgi::http::Response, h
     let channels = RedisChannelLayer::new();
     let reply_channels = vec![&*reply_channel];
     let (_, asgi_resp): (_, asgi::http::Response) = channels.receive(&reply_channels, true)
+        .unwrap()
         .unwrap();
     futures::future::ok(asgi_resp).boxed()
 }

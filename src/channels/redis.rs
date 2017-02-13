@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::time::Duration;
 
+use std;
 use redis;
 use redis::Commands;
 use rmp_serde::encode::VariantWriter;
@@ -12,6 +13,60 @@ use serde;
 use serde::{Deserialize, Serialize};
 
 use super::{random_string, shuffle, ChannelLayer};
+
+
+#[derive(Debug)]
+pub enum RedisChannelError {
+    Redis(redis::RedisError),
+    RmpEncode(rmp_serde::encode::Error),
+    RmpDecode(rmp_serde::decode::Error),
+}
+
+impl std::fmt::Display for RedisChannelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match *self {
+            RedisChannelError::Redis(ref err) => write!(f, "Redis error: {}", err),
+            RedisChannelError::RmpEncode(ref err) => write!(f, "rmp_serde encode error: {}", err),
+            RedisChannelError::RmpDecode(ref err) => write!(f, "rmp_serde decode error: {}", err),
+        }
+    }
+}
+
+impl std::error::Error for RedisChannelError {
+    fn description(&self) -> &str {
+        match *self {
+            RedisChannelError::Redis(ref err) => err.description(),
+            RedisChannelError::RmpEncode(ref err) => err.description(),
+            RedisChannelError::RmpDecode(ref err) => err.description(),
+        }
+    }
+
+    fn cause(&self) -> Option<&std::error::Error> {
+        match *self {
+            RedisChannelError::Redis(ref err) => err.cause(),
+            RedisChannelError::RmpEncode(ref err) => err.cause(),
+            RedisChannelError::RmpDecode(ref err) => err.cause(),
+        }
+    }
+}
+
+impl From<redis::RedisError> for RedisChannelError {
+    fn from(err: redis::RedisError) -> RedisChannelError {
+        RedisChannelError::Redis(err)
+    }
+}
+
+impl From<rmp_serde::encode::Error> for RedisChannelError {
+    fn from(err: rmp_serde::encode::Error) -> RedisChannelError {
+        RedisChannelError::RmpEncode(err)
+    }
+}
+
+impl From<rmp_serde::decode::Error> for RedisChannelError {
+    fn from(err: rmp_serde::decode::Error) -> RedisChannelError {
+        RedisChannelError::RmpDecode(err)
+    }
+}
 
 
 // asgi_redis expects msgpack map objects, which it'll deserialize to Python dicts.
@@ -35,7 +90,7 @@ impl VariantWriter for RmpStructMapWriter {
 }
 
 
-fn msgpack_serialize<S: Serialize>(val: &S) -> Result<Vec<u8>, self::rmp_serde::encode::Error> {
+fn msgpack_serialize<S: Serialize>(val: &S) -> Result<Vec<u8>, rmp_serde::encode::Error> {
     let mut buf = Vec::new();
     {
         // Create a Serializer using our custom RmpStructMapWriter.
@@ -45,7 +100,7 @@ fn msgpack_serialize<S: Serialize>(val: &S) -> Result<Vec<u8>, self::rmp_serde::
     Ok(buf)
 }
 
-fn msgpack_deserialize<D: Deserialize>(buf: &[u8]) -> Result<D, self::rmp_serde::decode::Error> {
+fn msgpack_deserialize<D: Deserialize>(buf: &[u8]) -> Result<D, rmp_serde::decode::Error> {
     // We don't have to do anything fancy here - rmp_serde will convert a msgpack map to
     // a Rust strut just fine.
     let mut deserializer = rmp_serde::Deserializer::new(buf);
@@ -92,7 +147,9 @@ impl RedisChannelLayer {
 }
 
 impl ChannelLayer for RedisChannelLayer {
-    fn send<S: Serialize>(&self, channel: &str, msg: &S) {
+    type Error = RedisChannelError;
+
+    fn send<S: Serialize>(&self, channel: &str, msg: &S) -> Result<(), Self::Error> {
         let message_key = self.prefix.to_owned() + "msg:" + &random_string(10);
         let channel_key = self.prefix.to_owned() + channel;
 
@@ -102,13 +159,18 @@ impl ChannelLayer for RedisChannelLayer {
         let channel_expiry = (self.expiry.as_secs() + 1) as usize;
 
         // TODO: Check the channel isn't full.
-        let _: () = self.conn.set(&message_key, buf).unwrap();
-        let _: () = self.conn.expire(&message_key, message_expiry).unwrap();
-        let _: () = self.conn.rpush(&channel_key, message_key).unwrap();
-        let _: () = self.conn.expire(&channel_key, channel_expiry).unwrap();
+        self.conn.set(&message_key, buf)?;
+        self.conn.expire(&message_key, message_expiry)?;
+        self.conn.rpush(&channel_key, message_key)?;
+        self.conn.expire(&channel_key, channel_expiry)?;
+
+        Ok(())
     }
 
-    fn receive<D: Deserialize>(&self, channels: &[&str], block: bool) -> Option<(String, D)> {
+    fn receive<D: Deserialize>(&self,
+                               channels: &[&str],
+                               block: bool)
+                               -> Result<Option<(String, D)>, Self::Error> {
         loop {
             let mut channels: Vec<String> = channels.iter()
                 .map(|channel| self.prefix.to_owned() + channel)
@@ -124,39 +186,39 @@ impl ChannelLayer for RedisChannelLayer {
                         cmd.arg(channel);
                     }
                     cmd.arg(self.blpop_timeout.as_secs());
-                    cmd.query(&self.conn).unwrap()
+                    cmd.query(&self.conn)?
                 }
                 false => {
                     let mut script = self.lpopmany.prepare_invoke();
                     for channel in channels {
                         script.arg(channel);
                     }
-                    script.invoke(&self.conn).unwrap()
+                    script.invoke(&self.conn)?
                 }
             };
 
             match result {
                 Some((channel_name, message_key)) => {
-                    let message: Option<Vec<u8>> = self.conn.get(&message_key).unwrap();
+                    let message: Option<Vec<u8>> = self.conn.get(&message_key)?;
                     match message {
                         Some(buf) => {
                             // Remove prefix from returned channel name.
                             let channel_name = channel_name[self.prefix.len()..].to_owned();
-                            return Some((channel_name, msgpack_deserialize(&buf).unwrap()));
+                            return Ok(Some((channel_name, msgpack_deserialize(&buf)?)));
                         }
                         // If the message has expired, move on to the next available channel.
                         None => {}
                     }
                 }
                 // If the channels didn't return any in the time available, return nothing.
-                None => return None,
+                None => return Ok(None),
             }
         }
     }
 
-    fn new_channel(&self, pattern: &str) -> String {
+    fn new_channel(&self, pattern: &str) -> Result<String, Self::Error> {
         // TODO: Check pattern ends in ! or ?
         // TODO: Check the new channel doesn't already exist.
-        pattern.to_owned() + &random_string(10)
+        Ok(pattern.to_owned() + &random_string(10))
     }
 }
