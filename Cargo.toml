@@ -11,6 +11,8 @@ rand = "*"
 serde = "0.9"
 serde_derive = "0.9"
 futures = "*"
+futures-cpupool = "*"
 
 # rmp-serde's support for serde 0.9 has not yet been released
 rmp-serde = { git = "https://github.com/3Hren/msgpack-rust.git" }
+thread-id = "*"

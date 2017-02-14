@@ -1,4 +1,5 @@
 extern crate futures;
+extern crate futures_cpupool;
 extern crate hyper;
 extern crate rand;
 extern crate redis;
@@ -9,12 +10,13 @@ extern crate serde;
 extern crate serde_derive;
 
 use futures::{BoxFuture, Future, Stream};
+use futures_cpupool::CpuPool;
 use hyper::{Headers, HttpVersion, Method, Uri};
 use hyper::status::StatusCode;
 use hyper::server::{Http, Service, Request, Response};
 use serde::bytes::{ByteBuf, Bytes};
 
-use channels::{ChannelLayer, RedisChannelLayer};
+use channels::{ChannelLayer, RedisChannelLayer, RedisChannelError};
 
 mod asgi;
 mod channels;
@@ -44,12 +46,12 @@ fn munge_headers(headers: &Headers) -> Vec<(ByteBuf, ByteBuf)> {
 
 struct AsgiInterface;
 
-fn send_request(method: Method,
-                uri: Uri,
-                version: HttpVersion,
-                headers: Headers,
-                body: Vec<u8>)
-                -> BoxFuture<String, hyper::Error> {
+fn send_request_sync(method: Method,
+                     uri: Uri,
+                     version: HttpVersion,
+                     headers: Headers,
+                     body: Vec<u8>)
+                     -> Result<String, RedisChannelError> {
     let channels = RedisChannelLayer::new();
 
     let chunk_size = 1024 * 1024 * 1024; // 1 MB
@@ -59,15 +61,14 @@ fn send_request(method: Method,
         None => &[0; 0],
     };
     let body_channel = match chunks.len() > 0 {
-        true => Some(channels.new_channel("http.request.body?").unwrap()),
+        true => Some(channels.new_channel("http.request.body?")?),
         false => None,
     };
 
     // Send the initial chunk of the request to http.request. We must use an extra scope for this
     // because otherwise we'll find reply_channel is borrowed for longer than necessary.
-    let reply_channel = channels.new_channel("http.response!").unwrap();
+    let reply_channel = channels.new_channel("http.response!")?;
     {
-        // TODO: make this async.
         channels.send("http.request",
                   &asgi::http::Request {
                       reply_channel: &reply_channel,
@@ -79,8 +80,7 @@ fn send_request(method: Method,
                       body: Bytes::from(initial_chunk),
                       // Dance to turn Option<String> to Option<&str>:
                       body_channel: body_channel.as_ref().map(String::as_ref),
-                  })
-            .unwrap();
+                  })?
     }
 
     // If the body of the request is over a certain size, then we must break it up and send each
@@ -90,21 +90,19 @@ fn send_request(method: Method,
         loop {
             match chunks.next() {
                 Some(chunk) => {
-                    // TODO: make this async.
                     channels.send(&body_channel,
                               &asgi::http::RequestBodyChunk {
                                   content: Bytes::from(chunk),
                                   closed: false,
                                   more_content: !chunks.peek().is_none(),
-                              })
-                        .unwrap();
+                              })?
                 }
                 None => break,
             }
         }
     }
 
-    futures::future::ok(reply_channel).boxed()
+    Ok(reply_channel)
 }
 
 fn wait_for_response(reply_channel: String) -> BoxFuture<asgi::http::Response, hyper::Error> {
@@ -137,6 +135,7 @@ impl Service for AsgiInterface {
 
     fn call(&self, req: Request) -> Self::Future {
         let (method, uri, version, headers, body) = req.deconstruct();
+        let cpu_pool = CpuPool::new(4);
 
         // Wait for the entire body of the request to be in memory before proceeding. It feels like
         // it would be nice to send each chunk over ASGI separately, but once Channels receives a
@@ -144,15 +143,19 @@ impl Service for AsgiInterface {
         // avoid blocking in the sync back-end Channels worker processes.
         body.collect()
             .and_then(|body| {
-                // We get a Vec<Chunk> - flatten into a simple array of bytes. We could avoid the
-                // copies here if we made send_request smarter and have it correct re-chunk a
-                // Vec<Chunk> into chunks of the right size. (We have no control over how hyper chunks).
+                // We get a Vec<Chunk> - flatten into a simple Vec<u8>. We could avoid copies if
+                // send_request_sync() were smarter, but it probably isn't worth it.
                 let body = body.iter()
                     .fold(Vec::new(), |mut vec, chunk| { vec.extend_from_slice(&chunk); vec });
                 futures::future::ok(body)
             })
             .and_then(move |body| {
-                send_request(method, uri, version, headers, body)
+                // In order to avoid complex code where ownership of various parts of the request
+                // body is unclear, we send the request synchronously. We do this on the
+                // thread-pool to avoid blocking the event loop.
+                cpu_pool.spawn_fn(move || send_request_sync(method, uri, version, headers, body))
+                    // TODO: Figure out how to communicate this error properly.
+                    .or_else(|_| futures::future::err(hyper::error::Error::Method))
             })
             .and_then(wait_for_response)
             .and_then(send_response)

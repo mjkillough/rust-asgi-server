@@ -2,7 +2,7 @@ use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 
 pub mod redis;
-pub use self::redis::RedisChannelLayer;
+pub use self::redis::{RedisChannelLayer, RedisChannelError};
 
 
 fn random_string(n: usize) -> String {
