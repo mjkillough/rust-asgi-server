@@ -108,9 +108,10 @@ fn send_request_sync(method: Method,
 fn wait_for_response(reply_channel: String) -> BoxFuture<asgi::http::Response, hyper::Error> {
     let channels = RedisChannelLayer::new();
     let reply_channels = vec![&*reply_channel];
-    let (_, asgi_resp): (_, asgi::http::Response) = channels.receive(&reply_channels, true)
+    let (_, reply): (_, _) = channels.receive(&reply_channels, true)
         .unwrap()
         .unwrap();
+    let asgi_resp: asgi::http::Response = RedisChannelLayer::deserialize(reply).unwrap();
     futures::future::ok(asgi_resp).boxed()
 }
 

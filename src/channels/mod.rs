@@ -14,13 +14,19 @@ fn shuffle<T>(values: &mut [T]) {
 }
 
 
+pub struct ChannelReply {
+    pub buf: Vec<u8>,
+}
+
+
 pub trait ChannelLayer {
     type Error;
 
     fn send<S: Serialize>(&self, channel: &str, msg: &S) -> Result<(), Self::Error>;
-    fn receive<D: Deserialize>(&self,
-                               channels: &[&str],
-                               block: bool)
-                               -> Result<Option<(String, D)>, Self::Error>;
+    fn receive(&self,
+               channels: &[&str],
+               block: bool)
+               -> Result<Option<(String, ChannelReply)>, Self::Error>;
+    fn deserialize<D: Deserialize>(reply: ChannelReply) -> Result<D, Self::Error>;
     fn new_channel(&self, pattern: &str) -> Result<String, Self::Error>;
 }

@@ -12,7 +12,7 @@ use rmp_serde;
 use serde;
 use serde::{Deserialize, Serialize};
 
-use super::{random_string, shuffle, ChannelLayer};
+use super::{random_string, shuffle, ChannelLayer, ChannelReply};
 
 
 #[derive(Debug)]
@@ -167,10 +167,10 @@ impl ChannelLayer for RedisChannelLayer {
         Ok(())
     }
 
-    fn receive<D: Deserialize>(&self,
-                               channels: &[&str],
-                               block: bool)
-                               -> Result<Option<(String, D)>, Self::Error> {
+    fn receive(&self,
+               channels: &[&str],
+               block: bool)
+               -> Result<Option<(String, ChannelReply)>, Self::Error> {
         loop {
             let mut channels: Vec<String> = channels.iter()
                 .map(|channel| self.prefix.to_owned() + channel)
@@ -204,7 +204,8 @@ impl ChannelLayer for RedisChannelLayer {
                         Some(buf) => {
                             // Remove prefix from returned channel name.
                             let channel_name = channel_name[self.prefix.len()..].to_owned();
-                            return Ok(Some((channel_name, msgpack_deserialize(&buf)?)));
+                            let reply = ChannelReply { buf: buf };
+                            return Ok(Some((channel_name, reply)));
                         }
                         // If the message has expired, move on to the next available channel.
                         None => {}
@@ -214,6 +215,10 @@ impl ChannelLayer for RedisChannelLayer {
                 None => return Ok(None),
             }
         }
+    }
+
+    fn deserialize<D: Deserialize>(reply: ChannelReply) -> Result<D, Self::Error> {
+        Ok(msgpack_deserialize(&reply.buf)?)
     }
 
     fn new_channel(&self, pattern: &str) -> Result<String, Self::Error> {
