@@ -1,3 +1,4 @@
+extern crate crossbeam;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate hyper;
@@ -9,6 +10,8 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 
+use std::clone::Clone;
+
 use futures::{BoxFuture, Future, Stream};
 use futures_cpupool::CpuPool;
 use hyper::{Headers, HttpVersion, Method, Uri};
@@ -17,9 +20,11 @@ use hyper::server::{Http, Service, Request, Response};
 use serde::bytes::{ByteBuf, Bytes};
 
 use channels::{ChannelLayer, RedisChannelLayer, RedisChannelError};
+use reply_pump::ReplyPump;
 
 mod asgi;
 mod channels;
+mod reply_pump;
 
 
 fn http_version_to_str(ver: &HttpVersion) -> &'static str {
@@ -42,9 +47,6 @@ fn munge_headers(headers: &Headers) -> Vec<(ByteBuf, ByteBuf)> {
         })
         .collect()
 }
-
-
-struct AsgiInterface;
 
 fn send_request_sync(method: Method,
                      uri: Uri,
@@ -107,8 +109,8 @@ fn send_request_sync(method: Method,
 
 fn wait_for_response(reply_channel: String) -> BoxFuture<asgi::http::Response, hyper::Error> {
     let channels = RedisChannelLayer::new();
-    let reply_channels = vec![&*reply_channel];
-    let (_, reply): (_, _) = channels.receive(&reply_channels, true)
+    let reply_channels = vec![reply_channel];
+    let (_, reply): (_, _) = channels.receive(reply_channels.iter(), true)
         .unwrap()
         .unwrap();
     let asgi_resp: asgi::http::Response = RedisChannelLayer::deserialize(reply).unwrap();
@@ -128,6 +130,18 @@ fn send_response(asgi_resp: asgi::http::Response) -> BoxFuture<Response, hyper::
 }
 
 
+struct AsgiInterface {
+    reply_pump: ReplyPump<RedisChannelLayer>,
+}
+
+impl AsgiInterface {
+    fn new() -> AsgiInterface {
+        let channel_layer = RedisChannelLayer::new();
+        let reply_pump = reply_pump::ReplyPump::new(channel_layer);
+        AsgiInterface { reply_pump: reply_pump }
+    }
+}
+
 impl Service for AsgiInterface {
     type Request = Request;
     type Response = Response;
@@ -138,6 +152,8 @@ impl Service for AsgiInterface {
         let (method, uri, version, headers, body) = req.deconstruct();
         let cpu_pool = CpuPool::new(4);
 
+        let reply_pump = self.reply_pump.clone();
+
         // Wait for the entire body of the request to be in memory before proceeding. It feels like
         // it would be nice to send each chunk over ASGI separately, but once Channels receives a
         // http.request, it blocks while it waits for its body. Buffer the entire body here to
@@ -147,7 +163,10 @@ impl Service for AsgiInterface {
                 // We get a Vec<Chunk> - flatten into a simple Vec<u8>. We could avoid copies if
                 // send_request_sync() were smarter, but it probably isn't worth it.
                 let body = body.iter()
-                    .fold(Vec::new(), |mut vec, chunk| { vec.extend_from_slice(&chunk); vec });
+                    .fold(Vec::new(), |mut vec, chunk| {
+                        vec.extend_from_slice(&chunk);
+                        vec
+                    });
                 futures::future::ok(body)
             })
             .and_then(move |body| {
@@ -158,7 +177,10 @@ impl Service for AsgiInterface {
                     // TODO: Figure out how to communicate this error properly.
                     .or_else(|_| futures::future::err(hyper::error::Error::Method))
             })
-            .and_then(wait_for_response)
+            // XXX The error handling here is a bit skew-whiff!
+            .map_err(|e| ())
+            .and_then(move |reply_channel| reply_pump.wait_for_reply_async(reply_channel))
+            .map_err(|e| hyper::Error::Incomplete)
             .and_then(send_response)
             .boxed()
     }
@@ -166,8 +188,7 @@ impl Service for AsgiInterface {
 
 fn main() {
     println!("Hello, world!");
-
     let addr = "127.0.0.1:8000".parse().unwrap();
-    let server = Http::new().bind(&addr, || Ok(AsgiInterface)).unwrap();
+    let server = Http::new().bind(&addr, || Ok(AsgiInterface::new())).unwrap();
     server.run().unwrap();
 }

@@ -167,13 +167,15 @@ impl ChannelLayer for RedisChannelLayer {
         Ok(())
     }
 
-    fn receive(&self,
-               channels: &[&str],
-               block: bool)
-               -> Result<Option<(String, ChannelReply)>, Self::Error> {
+    fn receive<'a, I>(&self,
+                      channels: I,
+                      block: bool)
+                      -> Result<Option<(String, ChannelReply)>, Self::Error>
+        where I: Iterator<Item = &'a String> + Clone
+    {
         loop {
-            let mut channels: Vec<String> = channels.iter()
-                .map(|channel| self.prefix.to_owned() + channel)
+            let mut channels: Vec<String> = channels.clone()
+                .map(|channel| self.prefix.to_owned() + &channel)
                 .collect();
 
             // Prevent one channel from starving the others.
@@ -191,7 +193,7 @@ impl ChannelLayer for RedisChannelLayer {
                 false => {
                     let mut script = self.lpopmany.prepare_invoke();
                     for channel in channels {
-                        script.arg(channel);
+                        script.key(channel);
                     }
                     script.invoke(&self.conn)?
                 }
