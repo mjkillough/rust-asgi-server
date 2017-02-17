@@ -56,7 +56,7 @@ fn send_request_sync(method: Method,
                      -> Result<String, RedisChannelError> {
     let channels = RedisChannelLayer::new();
 
-    let chunk_size = 1024 * 1024 * 1024; // 1 MB
+    let chunk_size = 1 * 1024 * 1024; // 1 MB
     let mut chunks = body.chunks(chunk_size).peekable();
     let initial_chunk = match chunks.next() {
         Some(chunk) => chunk,
