@@ -16,7 +16,7 @@ use futures::{BoxFuture, Future, Stream};
 use futures_cpupool::CpuPool;
 use hyper::{Headers, HttpVersion, Method, Uri};
 use hyper::status::StatusCode;
-use hyper::server::{Http, Service, Request, Response};
+use hyper::server::{Http, NewService, Service, Request, Response};
 use serde::bytes::{ByteBuf, Bytes};
 
 use channels::{ChannelLayer, RedisChannelLayer, RedisChannelError};
@@ -130,19 +130,35 @@ fn send_response(asgi_resp: asgi::http::Response) -> BoxFuture<Response, hyper::
 }
 
 
-struct AsgiInterface {
+struct AsgiHttpServiceFactory {
     reply_pump: ReplyPump<RedisChannelLayer>,
 }
 
-impl AsgiInterface {
-    fn new() -> AsgiInterface {
+impl AsgiHttpServiceFactory {
+    fn new() -> AsgiHttpServiceFactory {
         let channel_layer = RedisChannelLayer::new();
         let reply_pump = reply_pump::ReplyPump::new(channel_layer);
-        AsgiInterface { reply_pump: reply_pump }
+        AsgiHttpServiceFactory { reply_pump: reply_pump }
     }
 }
 
-impl Service for AsgiInterface {
+impl NewService for AsgiHttpServiceFactory {
+    type Request = Request;
+    type Response = Response;
+    type Error = hyper::Error;
+    type Instance = AsgiHttpService;
+
+    fn new_service(&self) -> Result<Self::Instance, std::io::Error> {
+        Ok(AsgiHttpService { reply_pump: self.reply_pump.clone() })
+    }
+}
+
+
+struct AsgiHttpService {
+    reply_pump: ReplyPump<RedisChannelLayer>,
+}
+
+impl Service for AsgiHttpService {
     type Request = Request;
     type Response = Response;
     type Error = hyper::Error;
@@ -189,6 +205,6 @@ impl Service for AsgiInterface {
 fn main() {
     println!("Hello, world!");
     let addr = "127.0.0.1:8000".parse().unwrap();
-    let server = Http::new().bind(&addr, || Ok(AsgiInterface::new())).unwrap();
+    let server = Http::new().bind(&addr, AsgiHttpServiceFactory::new()).unwrap();
     server.run().unwrap();
 }
