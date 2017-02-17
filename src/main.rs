@@ -107,16 +107,6 @@ fn send_request_sync(method: Method,
     Ok(reply_channel)
 }
 
-fn wait_for_response(reply_channel: String) -> BoxFuture<asgi::http::Response, hyper::Error> {
-    let channels = RedisChannelLayer::new();
-    let reply_channels = vec![reply_channel];
-    let (_, reply): (_, _) = channels.receive(reply_channels.iter(), true)
-        .unwrap()
-        .unwrap();
-    let asgi_resp: asgi::http::Response = RedisChannelLayer::deserialize(reply).unwrap();
-    futures::future::ok(asgi_resp).boxed()
-}
-
 fn send_response(asgi_resp: asgi::http::Response) -> BoxFuture<Response, hyper::Error> {
     let mut resp = Response::new();
     resp.set_status(StatusCode::from_u16(asgi_resp.status));
