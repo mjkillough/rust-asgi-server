@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "base64"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "byteorder 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -63,9 +63,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "hyper"
 version = "0.11.0-a.0"
-source = "git+https://github.com/hyperium/hyper#ed2334bef4960516a25536b0e35001d439d7c6b4"
+source = "git+https://github.com/hyperium/hyper#5af5fa104e3d5edc548dd5f190b48ca50fe75c99"
 dependencies = [
- "base64 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "base64 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "httparse 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -411,7 +411,7 @@ dependencies = [
 ]
 
 [metadata]
-"checksum base64 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "1d156a04ec694d726e92ea3c13e4a62949b4f0488a9344f04341d679ec6b127b"
+"checksum base64 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "065a0ce220ab84d0b6d5ae3e7bb77232209519c366f51f946fe28c19e84989d0"
 "checksum byteorder 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c40977b0ee6b9885c9013cd41d9feffdd22deb3bb4dc3a71d901cc7a77de18c8"
 "checksum cfg-if 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "de1e760d7b6535af4241fca8bd8adf68e2e7edacc6b29f5d399050c5e48cf88c"
 "checksum crossbeam 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)" = "0c5ea215664ca264da8a9d9c3be80d2eaf30923c259d03e870388eb927508f97"
