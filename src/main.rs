@@ -44,35 +44,17 @@ fn error_response(status: StatusCode, body: &str) -> Response<BodyStream> {
 }
 
 
-fn http_version_to_str(ver: &HttpVersion) -> &'static str {
-    match *ver {
-        // ASGI spec doesn't actually allow 0.9 to be used, but it's easiest
-        // for us to keep our mouth shut.
-        HttpVersion::Http09 => "0.9",
-        HttpVersion::Http10 => "1.0",
-        HttpVersion::Http11 => "1.1",
-        _ => panic!("Unsupported HTTP version"),
-    }
-}
-
-fn munge_headers(headers: &Headers) -> Vec<(ByteBuf, ByteBuf)> {
-    headers.iter()
-        .map(|header| {
-            let name = header.name().to_lowercase().into_bytes();
-            let value = header.value_string().into_bytes();
-            (ByteBuf::from(name), ByteBuf::from(value))
-        })
-        .collect()
-}
-
 fn send_request_sync(method: Method,
                      uri: Uri,
                      version: HttpVersion,
                      headers: Headers,
                      body: Vec<u8>)
                      -> Result<String, RedisChannelError> {
+    // TODO: Pull this from a pool.
     let channels = RedisChannelLayer::new();
 
+    // If the body of the request is over a certain size, then we must break it up and send each
+    // chunk separately on a per request http.request.body? channel.
     let chunk_size = 1 * 1024 * 1024; // 1 MB
     let mut chunks = body.chunks(chunk_size).peekable();
     let initial_chunk = match chunks.next() {
@@ -84,6 +66,21 @@ fn send_request_sync(method: Method,
         false => None,
     };
 
+    let version = match version {
+        HttpVersion::Http10 => "1.0",
+        HttpVersion::Http11 => "1.1",
+        _ => panic!("Unsupported HTTP version"),
+    };
+
+    // Lower-case the header names (as per ASGI spec) and convert to UTF-8 byte strings.
+    let headers: Vec<(ByteBuf, ByteBuf)> = headers.iter()
+        .map(|header| {
+            let name = header.name().to_lowercase().into_bytes();
+            let value = header.value_string().into_bytes();
+            (ByteBuf::from(name), ByteBuf::from(value))
+        })
+        .collect();
+
     // Send the initial chunk of the request to http.request. We must use an extra scope for this
     // because otherwise we'll find reply_channel is borrowed for longer than necessary.
     let reply_channel = channels.new_channel("http.response!")?;
@@ -91,20 +88,19 @@ fn send_request_sync(method: Method,
         channels.send("http.request",
                   &msgs::http::Request {
                       reply_channel: &reply_channel,
-                      http_version: &http_version_to_str(&version),
+                      http_version: &version,
                       method: method.as_ref(),
                       path: uri.path(),
                       query_string: uri.query().unwrap_or(""),
-                      headers: munge_headers(&headers),
+                      headers: headers,
                       body: Bytes::from(initial_chunk),
                       // Dance to turn Option<String> to Option<&str>:
                       body_channel: body_channel.as_ref().map(String::as_ref),
-                  })?
+                  })?;
     }
 
-    // If the body of the request is over a certain size, then we must break it up and send each
-    // chunk separately on a per request http.request.body? channel. We must do some iterator
-    // dancing, as we must know which chunk is the last.
+    // If we have more than one chunk, send each in a separate message down the body_channel.
+    // We must do some iterator dancing, as we must know which chunk is the last.
     if let Some(body_channel) = body_channel {
         loop {
             match chunks.next() {
