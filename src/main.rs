@@ -24,7 +24,7 @@ use serde::bytes::{ByteBuf, Bytes};
 
 use channels::{ChannelLayer, RedisChannelLayer, RedisChannelError, ReplyPump};
 
-mod asgi;
+mod msgs;
 mod channels;
 
 
@@ -86,7 +86,7 @@ fn send_request_sync(method: Method,
     let reply_channel = channels.new_channel("http.response!")?;
     {
         channels.send("http.request",
-                  &asgi::http::Request {
+                  &msgs::http::Request {
                       reply_channel: &reply_channel,
                       http_version: &http_version_to_str(&version),
                       method: method.as_ref(),
@@ -107,7 +107,7 @@ fn send_request_sync(method: Method,
             match chunks.next() {
                 Some(chunk) => {
                     channels.send(&body_channel,
-                              &asgi::http::RequestBodyChunk {
+                              &msgs::http::RequestBodyChunk {
                                   content: Bytes::from(chunk),
                                   closed: false,
                                   more_content: !chunks.peek().is_none(),
@@ -130,7 +130,7 @@ enum BodyStream {
 impl BodyStream {
     fn response(pump: ReplyPump<RedisChannelLayer>,
                 channel: String,
-                initial_chunk: asgi::http::ResponseBodyChunk)
+                initial_chunk: msgs::http::ResponseBodyChunk)
                 -> Self {
         BodyStream::Response(ResponseBodyStream {
             pump: pump,
@@ -175,7 +175,7 @@ impl Stream for ErrorBodyStream {
 struct ResponseBodyStream {
     pump: ReplyPump<RedisChannelLayer>,
     channel: String,
-    future: Option<BoxFuture<asgi::http::ResponseBodyChunk, ()>>,
+    future: Option<BoxFuture<msgs::http::ResponseBodyChunk, ()>>,
 }
 
 impl Stream for ResponseBodyStream {
@@ -215,7 +215,7 @@ impl Stream for ResponseBodyStream {
 
 fn send_response((pump, channel, asgi_resp): (ReplyPump<RedisChannelLayer>,
                                               String,
-                                              asgi::http::Response))
+                                              msgs::http::Response))
                  -> Result<Response<BodyStream>, ()> {
     let mut resp: Response<BodyStream> = Response::new();
     resp.set_status(StatusCode::from_u16(asgi_resp.status));
@@ -225,7 +225,7 @@ fn send_response((pump, channel, asgi_resp): (ReplyPump<RedisChannelLayer>,
         resp.headers_mut().set_raw(name, value);
     }
 
-    let initial_chunk = asgi::http::ResponseBodyChunk {
+    let initial_chunk = msgs::http::ResponseBodyChunk {
         content: asgi_resp.content,
         more_content: asgi_resp.more_content,
     };
@@ -303,7 +303,7 @@ impl Service for AsgiHttpService {
             // subsequent chunks inside the body stream.
             .and_then(move |reply_channel| {
                 reply_pump.wait_for_reply_async(reply_channel.clone())
-                    .map(move |asgi_response: asgi::http::Response| (reply_pump, reply_channel, asgi_response))
+                    .map(move |asgi_response: msgs::http::Response| (reply_pump, reply_channel, asgi_response))
                     .map_err(|_| ())
             })
             // Start sending the response to the client. If this is a streaming response, we'll
