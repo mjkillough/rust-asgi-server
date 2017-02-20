@@ -3,7 +3,9 @@ use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 
 pub mod redis;
+pub mod reply_pump;
 pub use self::redis::{RedisChannelLayer, RedisChannelError};
+pub use self::reply_pump::ReplyPump;
 
 
 fn random_string(n: usize) -> String {

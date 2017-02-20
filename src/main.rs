@@ -22,12 +22,10 @@ use hyper::server::{Http, NewService, Service, Request, Response};
 use hyper::mime::{Mime, TopLevel, SubLevel, Attr, Value};
 use serde::bytes::{ByteBuf, Bytes};
 
-use channels::{ChannelLayer, RedisChannelLayer, RedisChannelError};
-use reply_pump::ReplyPump;
+use channels::{ChannelLayer, RedisChannelLayer, RedisChannelError, ReplyPump};
 
 mod asgi;
 mod channels;
-mod reply_pump;
 
 
 fn error_response(status: StatusCode, body: &str) -> Response<BodyStream> {
@@ -243,7 +241,7 @@ struct AsgiHttpServiceFactory {
 impl AsgiHttpServiceFactory {
     fn new() -> AsgiHttpServiceFactory {
         let channel_layer = RedisChannelLayer::new();
-        let reply_pump = reply_pump::ReplyPump::new(channel_layer);
+        let reply_pump = ReplyPump::new(channel_layer);
         AsgiHttpServiceFactory { reply_pump: reply_pump }
     }
 }
