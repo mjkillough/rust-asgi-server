@@ -61,10 +61,10 @@ impl Service for AsgiHttpService {
         // We don't actually care about the errors of the individual stages, as we'll return a
         // generic error response to the client, so we keep it simple and  map all errors to ().
         body
-            // Wait for the entire body of the request to be in memory before proceeding. It feels like
-            // it would be nice to send each chunk over ASGI separately, but once Channels receives a
-            // http.request, it blocks while it waits for its body. Buffer the entire body here to
-            // avoid blocking in the sync back-end Channels worker processes.
+            // Wait for the entire body of the request to be in memory before proceeding. It feels
+            // like it would be nice to send each chunk over ASGI separately, but once Channels
+            // receives a http.request, it blocks while it waits for its body. Buffer the entire
+            // body here to avoid blocking in the sync back-end Channels worker processes.
             .collect()
             .map_err(|_| ())
             // Convert our Vec<Chunk> to a Vec<u8>.
@@ -75,8 +75,8 @@ impl Service for AsgiHttpService {
                         vec
                     })
             })
-            // Send our body down the channel. To keep the code simple we do this in one synchronous
-            // operation on the thread-pool.
+            // Send our body down the channel. To keep the code simple we do this in one
+            // synchronous operation on the thread-pool.
             .and_then(move |body| {
                 cpu_pool.spawn_fn(move || send_request_sync(method, uri, version, headers, body))
                     .map_err(|_| ())
@@ -85,8 +85,8 @@ impl Service for AsgiHttpService {
             // We wait for the initial response on the request's reply channel. We'll wait for
             // subsequent chunks inside the body stream.
             .and_then(move |reply_channel| {
-                reply_pump.wait_for_reply_async(reply_channel.clone())
-                    .map(move |asgi_response: msgs::http::Response| (reply_pump, reply_channel, asgi_response))
+                reply_pump.wait_for_reply_async::<msgs::http::Response>(reply_channel.clone())
+                    .map(move |asgi_response| (reply_pump, reply_channel, asgi_response))
                     .map_err(|_| ())
             })
             // Start sending the response to the client. If this is a streaming response, we'll
@@ -96,7 +96,9 @@ impl Service for AsgiHttpService {
             // client. Note that we do not propogate the error to Hyper - the request has succeeded
             // as far as it's concerned.
             .or_else(|_| {
-                futures::future::ok(error_response(StatusCode::InternalServerError, "Unknown server error"))
+                futures::future::ok(
+                    error_response(StatusCode::InternalServerError, "Unknown server error")
+                )
             })
             .boxed()
     }

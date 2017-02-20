@@ -15,9 +15,9 @@ pub enum BodyStream {
 
 impl BodyStream {
     pub fn response(pump: ReplyPump<RedisChannelLayer>,
-                channel: String,
-                initial_chunk: msgs::http::ResponseBodyChunk)
-                -> Self {
+                    channel: String,
+                    initial_chunk: msgs::http::ResponseBodyChunk)
+                    -> Self {
         BodyStream::Response(ResponseBodyStream {
             pump: pump,
             channel: channel,
