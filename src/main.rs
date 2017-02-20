@@ -1,14 +1,14 @@
 extern crate crossbeam;
-extern crate futures;
 extern crate futures_cpupool;
+extern crate futures;
 extern crate hyper;
 extern crate rand;
 extern crate redis;
-extern crate rmp;
 extern crate rmp_serde;
-extern crate serde;
+extern crate rmp;
 #[macro_use]
 extern crate serde_derive;
+extern crate serde;
 
 mod body;
 mod channels;
