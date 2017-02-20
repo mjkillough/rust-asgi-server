@@ -32,9 +32,7 @@ use body::BodyStream;
 
 
 fn error_response(status: StatusCode, body: &str) -> Response<BodyStream> {
-    let body = format!(include_str!("error.html"),
-                       status = status,
-                       body = body);
+    let body = format!(include_str!("error.html"), status = status, body = body);
     Response::new()
         .with_status(status)
         .with_header(ContentType(Mime(TopLevel::Text,
