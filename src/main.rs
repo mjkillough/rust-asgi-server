@@ -16,8 +16,10 @@ use futures::{Async, BoxFuture, Future, Stream, Poll};
 use futures::stream::unfold;
 use futures_cpupool::CpuPool;
 use hyper::{Headers, HttpVersion, Method, Uri};
+use hyper::header::ContentType;
 use hyper::status::StatusCode;
 use hyper::server::{Http, NewService, Service, Request, Response};
+use hyper::mime::{Mime, TopLevel, SubLevel, Attr, Value};
 use serde::bytes::{ByteBuf, Bytes};
 
 use channels::{ChannelLayer, RedisChannelLayer, RedisChannelError};
@@ -26,6 +28,19 @@ use reply_pump::ReplyPump;
 mod asgi;
 mod channels;
 mod reply_pump;
+
+
+fn error_response(status: StatusCode, body: &str) -> Response<BodyStream> {
+    let body = format!(include_str!("error.html"),
+                       status = status,
+                       body = body);
+    Response::new()
+        .with_status(status)
+        .with_header(ContentType(Mime(TopLevel::Text,
+                                      SubLevel::Html,
+                                      vec![(Attr::Charset, Value::Utf8)])))
+        .with_body(BodyStream::error(body))
+}
 
 
 fn http_version_to_str(ver: &HttpVersion) -> &'static str {
@@ -203,7 +218,7 @@ impl Stream for ResponseBodyStream {
 fn send_response((pump, channel, asgi_resp): (ReplyPump<RedisChannelLayer>,
                                               String,
                                               asgi::http::Response))
-                 -> BoxFuture<Response<BodyStream>, hyper::Error> {
+                 -> Result<Response<BodyStream>, ()> {
     let mut resp: Response<BodyStream> = Response::new();
     resp.set_status(StatusCode::from_u16(asgi_resp.status));
     for (name, value) in asgi_resp.headers {
@@ -217,7 +232,7 @@ fn send_response((pump, channel, asgi_resp): (ReplyPump<RedisChannelLayer>,
         more_content: asgi_resp.more_content,
     };
     let stream = BodyStream::response(pump, channel, initial_chunk);
-    futures::future::ok(resp.with_body(stream)).boxed()
+    Ok(resp.with_body(stream))
 }
 
 
@@ -253,7 +268,7 @@ impl Service for AsgiHttpService {
     type Request = Request;
     type Response = Response<BodyStream>;
     type Error = hyper::Error;
-    type Future = Box<Future<Item = Self::Response, Error = hyper::Error>>;
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
         let (method, uri, version, headers, body) = req.deconstruct();
@@ -261,37 +276,47 @@ impl Service for AsgiHttpService {
 
         let reply_pump = self.reply_pump.clone();
 
-        // Wait for the entire body of the request to be in memory before proceeding. It feels like
-        // it would be nice to send each chunk over ASGI separately, but once Channels receives a
-        // http.request, it blocks while it waits for its body. Buffer the entire body here to
-        // avoid blocking in the sync back-end Channels worker processes.
-        body.collect()
-            .and_then(|body| {
-                // We get a Vec<Chunk> - flatten into a simple Vec<u8>. We could avoid copies if
-                // send_request_sync() were smarter, but it probably isn't worth it.
-                let body = body.iter()
+        // We chain a series of futures together in order to handle the request/response async.
+        // We don't actually care about the errors of the individual stages, as we'll return a
+        // generic error response to the client, so we keep it simple and  map all errors to ().
+        body
+            // Wait for the entire body of the request to be in memory before proceeding. It feels like
+            // it would be nice to send each chunk over ASGI separately, but once Channels receives a
+            // http.request, it blocks while it waits for its body. Buffer the entire body here to
+            // avoid blocking in the sync back-end Channels worker processes.
+            .collect()
+            .map_err(|_| ())
+            // Convert our Vec<Chunk> to a Vec<u8>.
+            .map(|body| {
+                body.iter()
                     .fold(Vec::new(), |mut vec, chunk| {
                         vec.extend_from_slice(&chunk);
                         vec
-                    });
-                futures::future::ok(body)
+                    })
             })
+            // Send our body down the channel. To keep the code simple we do this in one synchronous
+            // operation on the thread-pool.
             .and_then(move |body| {
-                // In order to avoid complex code where ownership of various parts of the request
-                // body is unclear, we send the request synchronously. We do this on the
-                // thread-pool to avoid blocking the event loop.
                 cpu_pool.spawn_fn(move || send_request_sync(method, uri, version, headers, body))
-                    // TODO: Figure out how to communicate this error properly.
-                    .or_else(|_| futures::future::err(hyper::error::Error::Method))
+                    .map_err(|_| ())
             })
-            // XXX The error handling here is a bit skew-whiff!
-            .map_err(|e| ())
+            .map_err(|_| ())
+            // We wait for the initial response on the request's reply channel. We'll wait for
+            // subsequent chunks inside the body stream.
             .and_then(move |reply_channel| {
                 reply_pump.wait_for_reply_async(reply_channel.clone())
                     .map(move |asgi_response: asgi::http::Response| (reply_pump, reply_channel, asgi_response))
+                    .map_err(|_| ())
             })
-            .map_err(|e| hyper::Error::Incomplete)
+            // Start sending the response to the client. If this is a streaming response, we'll
+            // return a body stream which continues to send chunks as we receive them.
             .and_then(send_response)
+            // If we encountered any error along the way, give a generic error response to the
+            // client. Note that we do not propogate the error to Hyper - the request has succeeded
+            // as far as it's concerned.
+            .or_else(|_| {
+                futures::future::ok(error_response(StatusCode::InternalServerError, "Unknown server error"))
+            })
             .boxed()
     }
 }
