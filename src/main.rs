@@ -109,23 +109,60 @@ fn send_request_sync(method: Method,
 }
 
 
+enum BodyStream {
+    Error(ErrorBodyStream),
+    Response(ResponseBodyStream),
+}
+
+impl BodyStream {
+    fn response(pump: ReplyPump<RedisChannelLayer>,
+                channel: String,
+                initial_chunk: asgi::http::ResponseBodyChunk)
+                -> Self {
+        BodyStream::Response(ResponseBodyStream {
+            pump: pump,
+            channel: channel,
+            future: Some(futures::future::ok(initial_chunk).boxed()),
+        })
+    }
+
+    fn error(body: String) -> Self {
+        BodyStream::Error(ErrorBodyStream(Some(body)))
+    }
+}
+
+impl Stream for BodyStream {
+    type Item = Vec<u8>;
+    type Error = hyper::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match self {
+            &mut BodyStream::Error(ref mut resp) => resp.poll(),
+            &mut BodyStream::Response(ref mut resp) => resp.poll(),
+        }
+    }
+}
+
+
+struct ErrorBodyStream(Option<String>);
+
+impl Stream for ErrorBodyStream {
+    type Item = Vec<u8>;
+    type Error = hyper::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match std::mem::replace(&mut self.0, None) {
+            Some(body) => Ok(Async::Ready(Some(body.into_bytes()))),
+            None => Ok(Async::Ready(None)),
+        }
+    }
+}
+
+
 struct ResponseBodyStream {
     pump: ReplyPump<RedisChannelLayer>,
     channel: String,
     future: Option<BoxFuture<asgi::http::ResponseBodyChunk, ()>>,
-}
-
-impl ResponseBodyStream {
-    fn new(pump: ReplyPump<RedisChannelLayer>,
-           channel: String,
-           initial_chunk: asgi::http::ResponseBodyChunk)
-           -> Self {
-        ResponseBodyStream {
-            pump: pump,
-            channel: channel,
-            future: Some(futures::future::ok(initial_chunk).boxed()),
-        }
-    }
 }
 
 impl Stream for ResponseBodyStream {
@@ -166,8 +203,8 @@ impl Stream for ResponseBodyStream {
 fn send_response((pump, channel, asgi_resp): (ReplyPump<RedisChannelLayer>,
                                               String,
                                               asgi::http::Response))
-                 -> BoxFuture<Response<ResponseBodyStream>, hyper::Error> {
-    let mut resp: Response<ResponseBodyStream> = Response::new();
+                 -> BoxFuture<Response<BodyStream>, hyper::Error> {
+    let mut resp: Response<BodyStream> = Response::new();
     resp.set_status(StatusCode::from_u16(asgi_resp.status));
     for (name, value) in asgi_resp.headers {
         let name = String::from_utf8(name.into()).unwrap();
@@ -179,7 +216,7 @@ fn send_response((pump, channel, asgi_resp): (ReplyPump<RedisChannelLayer>,
         content: asgi_resp.content,
         more_content: asgi_resp.more_content,
     };
-    let stream = ResponseBodyStream::new(pump, channel, initial_chunk);
+    let stream = BodyStream::response(pump, channel, initial_chunk);
     futures::future::ok(resp.with_body(stream)).boxed()
 }
 
@@ -198,7 +235,7 @@ impl AsgiHttpServiceFactory {
 
 impl NewService for AsgiHttpServiceFactory {
     type Request = Request;
-    type Response = Response<ResponseBodyStream>;
+    type Response = Response<BodyStream>;
     type Error = hyper::Error;
     type Instance = AsgiHttpService;
 
@@ -214,7 +251,7 @@ struct AsgiHttpService {
 
 impl Service for AsgiHttpService {
     type Request = Request;
-    type Response = Response<ResponseBodyStream>;
+    type Response = Response<BodyStream>;
     type Error = hyper::Error;
     type Future = Box<Future<Item = Self::Response, Error = hyper::Error>>;
 
