@@ -35,3 +35,10 @@ pub struct Response {
     pub content: ByteBuf,
     pub more_content: bool,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ResponseBodyChunk {
+    #[serde(default)]
+    pub content: ByteBuf,
+    pub more_content: bool,
+}

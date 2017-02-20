@@ -12,7 +12,8 @@ extern crate serde_derive;
 
 use std::clone::Clone;
 
-use futures::{BoxFuture, Future, Stream};
+use futures::{Async, BoxFuture, Future, Stream, Poll};
+use futures::stream::unfold;
 use futures_cpupool::CpuPool;
 use hyper::{Headers, HttpVersion, Method, Uri};
 use hyper::status::StatusCode;
@@ -107,16 +108,79 @@ fn send_request_sync(method: Method,
     Ok(reply_channel)
 }
 
-fn send_response(asgi_resp: asgi::http::Response) -> BoxFuture<Response, hyper::Error> {
-    let mut resp = Response::new();
+
+struct ResponseBodyStream {
+    pump: ReplyPump<RedisChannelLayer>,
+    channel: String,
+    future: Option<BoxFuture<asgi::http::ResponseBodyChunk, ()>>,
+}
+
+impl ResponseBodyStream {
+    fn new(pump: ReplyPump<RedisChannelLayer>,
+           channel: String,
+           initial_chunk: asgi::http::ResponseBodyChunk)
+           -> Self {
+        ResponseBodyStream {
+            pump: pump,
+            channel: channel,
+            future: Some(futures::future::ok(initial_chunk).boxed()),
+        }
+    }
+}
+
+impl Stream for ResponseBodyStream {
+    type Item = Vec<u8>;
+    type Error = hyper::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match std::mem::replace(&mut self.future, None) {
+            // We are waiting for the next chunk to be ready - poll the future.
+            Some(mut future) => {
+                match future.poll() {
+                    // We have a chunk. If it isn't our last, then start waiting for the next chunk,
+                    // whilst we yield this one.
+                    Ok(Async::Ready(resp)) => {
+                        self.future = match resp.more_content {
+                            true => Some(self.pump.wait_for_reply_async(self.channel.clone())),
+                            false => None,
+                        };
+                        // Yield the chunk we've received.
+                        Ok(Async::Ready(Some(resp.content.into())))
+                    }
+                    // Our future isn't ready - remember to poll it next time.
+                    Ok(Async::NotReady) => {
+                        self.future = Some(future);
+                        Ok(Async::NotReady)
+                    }
+                    // XXX What error should we be sending here?
+                    Err(()) => Err(hyper::Error::Incomplete),
+                }
+            }
+            // The last chunk was our last. Indicate end-of-stream.
+            None => Ok(Async::Ready(None)),
+        }
+    }
+}
+
+
+fn send_response((pump, channel, asgi_resp): (ReplyPump<RedisChannelLayer>,
+                                              String,
+                                              asgi::http::Response))
+                 -> BoxFuture<Response<ResponseBodyStream>, hyper::Error> {
+    let mut resp: Response<ResponseBodyStream> = Response::new();
     resp.set_status(StatusCode::from_u16(asgi_resp.status));
     for (name, value) in asgi_resp.headers {
         let name = String::from_utf8(name.into()).unwrap();
         let value: Vec<u8> = value.into();
         resp.headers_mut().set_raw(name, value);
     }
-    let content: Vec<u8> = asgi_resp.content.into();
-    futures::future::ok(resp.with_body(content)).boxed()
+
+    let initial_chunk = asgi::http::ResponseBodyChunk {
+        content: asgi_resp.content,
+        more_content: asgi_resp.more_content,
+    };
+    let stream = ResponseBodyStream::new(pump, channel, initial_chunk);
+    futures::future::ok(resp.with_body(stream)).boxed()
 }
 
 
@@ -134,7 +198,7 @@ impl AsgiHttpServiceFactory {
 
 impl NewService for AsgiHttpServiceFactory {
     type Request = Request;
-    type Response = Response;
+    type Response = Response<ResponseBodyStream>;
     type Error = hyper::Error;
     type Instance = AsgiHttpService;
 
@@ -150,9 +214,9 @@ struct AsgiHttpService {
 
 impl Service for AsgiHttpService {
     type Request = Request;
-    type Response = Response;
+    type Response = Response<ResponseBodyStream>;
     type Error = hyper::Error;
-    type Future = Box<Future<Item = Response, Error = hyper::Error>>;
+    type Future = Box<Future<Item = Self::Response, Error = hyper::Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
         let (method, uri, version, headers, body) = req.deconstruct();
@@ -185,7 +249,10 @@ impl Service for AsgiHttpService {
             })
             // XXX The error handling here is a bit skew-whiff!
             .map_err(|e| ())
-            .and_then(move |reply_channel| reply_pump.wait_for_reply_async(reply_channel))
+            .and_then(move |reply_channel| {
+                reply_pump.wait_for_reply_async(reply_channel.clone())
+                    .map(move |asgi_response: asgi::http::Response| (reply_pump, reply_channel, asgi_response))
+            })
             .map_err(|e| hyper::Error::Incomplete)
             .and_then(send_response)
             .boxed()
