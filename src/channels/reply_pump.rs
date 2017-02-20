@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crossbeam::sync::MsQueue;
-use futures::{Async, BoxFuture, Future};
+use futures::{BoxFuture, Future};
 use futures::sync::oneshot;
 
 use serde::Deserialize;
@@ -85,7 +85,7 @@ impl<C> ReplyPump<C>
         }));
 
         // TODO: Propogate canceled error? We should probably wrap it in our own type first.
-        rx.map_err(|e| ())
+        rx.map_err(|_| ())
             .map(|reply| C::deserialize(reply).unwrap())
             .boxed()
     }
