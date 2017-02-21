@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::time::Duration;
 
-use std;
 use r2d2;
 use redis;
 use redis::{ConnectionInfo, Commands, IntoConnectionInfo};
@@ -13,61 +12,7 @@ use rmp_serde;
 use serde;
 use serde::{Deserialize, Serialize};
 
-use super::{random_string, shuffle, ChannelLayer, ChannelReply};
-
-
-#[derive(Debug)]
-pub enum RedisChannelError {
-    Redis(redis::RedisError),
-    RmpEncode(rmp_serde::encode::Error),
-    RmpDecode(rmp_serde::decode::Error),
-}
-
-impl std::fmt::Display for RedisChannelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match *self {
-            RedisChannelError::Redis(ref err) => write!(f, "Redis error: {}", err),
-            RedisChannelError::RmpEncode(ref err) => write!(f, "rmp_serde encode error: {}", err),
-            RedisChannelError::RmpDecode(ref err) => write!(f, "rmp_serde decode error: {}", err),
-        }
-    }
-}
-
-impl std::error::Error for RedisChannelError {
-    fn description(&self) -> &str {
-        match *self {
-            RedisChannelError::Redis(ref err) => err.description(),
-            RedisChannelError::RmpEncode(ref err) => err.description(),
-            RedisChannelError::RmpDecode(ref err) => err.description(),
-        }
-    }
-
-    fn cause(&self) -> Option<&std::error::Error> {
-        match *self {
-            RedisChannelError::Redis(ref err) => err.cause(),
-            RedisChannelError::RmpEncode(ref err) => err.cause(),
-            RedisChannelError::RmpDecode(ref err) => err.cause(),
-        }
-    }
-}
-
-impl From<redis::RedisError> for RedisChannelError {
-    fn from(err: redis::RedisError) -> RedisChannelError {
-        RedisChannelError::Redis(err)
-    }
-}
-
-impl From<rmp_serde::encode::Error> for RedisChannelError {
-    fn from(err: rmp_serde::encode::Error) -> RedisChannelError {
-        RedisChannelError::RmpEncode(err)
-    }
-}
-
-impl From<rmp_serde::decode::Error> for RedisChannelError {
-    fn from(err: rmp_serde::decode::Error) -> RedisChannelError {
-        RedisChannelError::RmpDecode(err)
-    }
-}
+use super::{random_string, shuffle, ChannelError, ChannelLayer, ChannelReply};
 
 
 // asgi_redis expects msgpack map objects, which it'll deserialize to Python dicts.
@@ -120,7 +65,7 @@ pub struct RedisChannelLayer {
 }
 
 impl RedisChannelLayer {
-    pub fn new<I>(info: I) -> Result<Self, RedisChannelError>
+    pub fn new<I>(info: I) -> Result<Self, ChannelError>
         where I: IntoConnectionInfo
     {
         let client = redis::Client::open(info)?;
@@ -150,10 +95,9 @@ impl RedisChannelLayer {
 }
 
 impl ChannelLayer for RedisChannelLayer {
-    type Error = RedisChannelError;
     type Manager = RedisChannelLayerManager;
 
-    fn send<S: Serialize>(&self, channel: &str, msg: &S) -> Result<(), Self::Error> {
+    fn send<S: Serialize>(&self, channel: &str, msg: &S) -> Result<(), ChannelError> {
         let message_key = self.prefix.to_owned() + "msg:" + &random_string(10);
         let channel_key = self.prefix.to_owned() + channel;
 
@@ -174,7 +118,7 @@ impl ChannelLayer for RedisChannelLayer {
     fn receive<'a, I>(&self,
                       channels: I,
                       block: bool)
-                      -> Result<Option<(String, ChannelReply)>, Self::Error>
+                      -> Result<Option<(String, ChannelReply)>, ChannelError>
         where I: Iterator<Item = &'a String> + Clone
     {
         loop {
@@ -223,11 +167,11 @@ impl ChannelLayer for RedisChannelLayer {
         }
     }
 
-    fn deserialize<D: Deserialize>(reply: ChannelReply) -> Result<D, Self::Error> {
+    fn deserialize<D: Deserialize>(reply: ChannelReply) -> Result<D, ChannelError> {
         Ok(msgpack_deserialize(&reply.buf)?)
     }
 
-    fn new_channel(&self, pattern: &str) -> Result<String, Self::Error> {
+    fn new_channel(&self, pattern: &str) -> Result<String, ChannelError> {
         // TODO: Check pattern ends in ! or ?
         // TODO: Check the new channel doesn't already exist.
         Ok(pattern.to_owned() + &random_string(10))
@@ -241,7 +185,7 @@ pub struct RedisChannelLayerManager {
 }
 
 impl RedisChannelLayerManager {
-    pub fn new<I>(info: I) -> Result<Self, RedisChannelError>
+    pub fn new<I>(info: I) -> Result<Self, ChannelError>
         where I: IntoConnectionInfo
     {
         Ok(RedisChannelLayerManager { info: info.into_connection_info()? })
@@ -250,17 +194,39 @@ impl RedisChannelLayerManager {
 
 impl r2d2::ManageConnection for RedisChannelLayerManager {
     type Connection = RedisChannelLayer;
-    type Error = RedisChannelError;
+    type Error = ChannelError;
 
-    fn connect(&self) -> Result<Self::Connection, Self::Error> {
+    fn connect(&self) -> Result<Self::Connection, ChannelError> {
         Ok(RedisChannelLayer::new(self.info.clone())?)
     }
 
-    fn is_valid(&self, channel_layer: &mut Self::Connection) -> Result<(), Self::Error> {
+    fn is_valid(&self, channel_layer: &mut Self::Connection) -> Result<(), ChannelError> {
         Ok(redis::cmd("PING").query(&channel_layer.conn)?)
     }
 
     fn has_broken(&self, _: &mut Self::Connection) -> bool {
         false
+    }
+}
+
+
+// Our channel layer specific error types. We don't expect the user will be able to do much with
+// these, so we don't feel too bad erasing the type. We may later want to parse the useful bits
+// of the error out into something ChannelError understands.
+impl From<redis::RedisError> for ChannelError {
+    fn from(err: redis::RedisError) -> ChannelError {
+        ChannelError::Transport(Box::new(err))
+    }
+}
+
+impl From<rmp_serde::encode::Error> for ChannelError {
+    fn from(err: rmp_serde::encode::Error) -> ChannelError {
+        ChannelError::Serialize(Box::new(err))
+    }
+}
+
+impl From<rmp_serde::decode::Error> for ChannelError {
+    fn from(err: rmp_serde::decode::Error) -> ChannelError {
+        ChannelError::Deserialize(Box::new(err))
     }
 }

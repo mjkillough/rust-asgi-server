@@ -14,7 +14,7 @@ use r2d2;
 use serde::bytes::{ByteBuf, Bytes};
 
 use body::BodyStream;
-use channels::{ChannelLayer, RedisChannelLayer, RedisChannelLayerManager, ReplyPump};
+use channels::{ChannelError, ChannelLayer, RedisChannelLayer, RedisChannelLayerManager, ReplyPump};
 use msgs;
 
 
@@ -144,7 +144,7 @@ fn send_request_sync<C>(channel_pool: r2d2::Pool<C::Manager>,
                         version: HttpVersion,
                         headers: Headers,
                         body: Vec<u8>)
-                        -> Result<String, C::Error>
+                        -> Result<String, ChannelError>
     where C: ChannelLayer
 {
     let channels = channel_pool.get().unwrap();
