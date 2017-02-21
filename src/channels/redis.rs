@@ -2,8 +2,9 @@ use std::io::Write;
 use std::time::Duration;
 
 use std;
+use r2d2;
 use redis;
-use redis::Commands;
+use redis::{ConnectionInfo, Commands, IntoConnectionInfo};
 use rmp_serde::encode::VariantWriter;
 use rmp;
 use rmp::Marker;
@@ -119,9 +120,11 @@ pub struct RedisChannelLayer {
 }
 
 impl RedisChannelLayer {
-    pub fn new() -> RedisChannelLayer {
-        let client = redis::Client::open("redis://127.0.0.1/").unwrap();
-        let conn = client.get_connection().unwrap();
+    pub fn new<I>(info: I) -> Result<Self, RedisChannelError>
+        where I: IntoConnectionInfo
+    {
+        let client = redis::Client::open(info)?;
+        let conn = client.get_connection()?;
 
         // This script comes from asgi_redis:
         let lpopmany = redis::Script::new(r"
@@ -134,7 +137,7 @@ impl RedisChannelLayer {
             return nil
         ");
 
-        RedisChannelLayer {
+        Ok(RedisChannelLayer {
             conn: conn,
 
             prefix: "asgi:".to_owned(),
@@ -142,7 +145,7 @@ impl RedisChannelLayer {
             blpop_timeout: Duration::from_secs(5),
 
             lpopmany: lpopmany,
-        }
+        })
     }
 }
 
@@ -227,5 +230,36 @@ impl ChannelLayer for RedisChannelLayer {
         // TODO: Check pattern ends in ! or ?
         // TODO: Check the new channel doesn't already exist.
         Ok(pattern.to_owned() + &random_string(10))
+    }
+}
+
+
+#[derive(Debug)]
+pub struct RedisChannelLayerManager {
+    info: ConnectionInfo,
+}
+
+impl RedisChannelLayerManager {
+    pub fn new<I>(info: I) -> Result<Self, RedisChannelError>
+        where I: IntoConnectionInfo
+    {
+        Ok(RedisChannelLayerManager { info: info.into_connection_info()? })
+    }
+}
+
+impl r2d2::ManageConnection for RedisChannelLayerManager {
+    type Connection = RedisChannelLayer;
+    type Error = RedisChannelError;
+
+    fn connect(&self) -> Result<Self::Connection, Self::Error> {
+        Ok(RedisChannelLayer::new(self.info.clone())?)
+    }
+
+    fn is_valid(&self, channel_layer: &mut Self::Connection) -> Result<(), Self::Error> {
+        Ok(redis::cmd("PING").query(&channel_layer.conn)?)
+    }
+
+    fn has_broken(&self, conn: &mut Self::Connection) -> bool {
+        false
     }
 }

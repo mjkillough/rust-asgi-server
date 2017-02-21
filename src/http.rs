@@ -10,22 +10,39 @@ use hyper::header::ContentType;
 use hyper::mime::{Attr, Mime, SubLevel, TopLevel, Value};
 use hyper::server::{NewService, Response, Request, Service};
 use hyper::status::StatusCode;
+use r2d2;
 use serde::bytes::{ByteBuf, Bytes};
 
 use body::BodyStream;
-use channels::{ChannelLayer, RedisChannelLayer, RedisChannelError, ReplyPump};
+use channels::{ChannelLayer, RedisChannelError, RedisChannelLayer, RedisChannelLayerManager,
+               ReplyPump};
 use msgs;
 
 
 pub struct AsgiHttpServiceFactory {
     reply_pump: ReplyPump<RedisChannelLayer>,
+    channel_pool: r2d2::Pool<RedisChannelLayerManager>,
 }
 
 impl AsgiHttpServiceFactory {
     pub fn new() -> AsgiHttpServiceFactory {
-        let channel_layer = RedisChannelLayer::new();
+        let connection_info = "redis://127.0.0.1";
+
+        // Make a ReplyPump with its own dedicated channel layer.
+        let channel_layer = RedisChannelLayer::new(connection_info.clone()).unwrap();
         let reply_pump = ReplyPump::new(channel_layer);
-        AsgiHttpServiceFactory { reply_pump: reply_pump }
+
+        // Make a pool of channel layers that we can use to send requests on.
+        let config = r2d2::Config::builder()
+            .pool_size(15)
+            .build();
+        let manager = RedisChannelLayerManager::new(connection_info).unwrap();
+        let pool = r2d2::Pool::new(config, manager).unwrap();
+
+        AsgiHttpServiceFactory {
+            reply_pump: reply_pump,
+            channel_pool: pool,
+        }
     }
 }
 
@@ -36,13 +53,17 @@ impl NewService for AsgiHttpServiceFactory {
     type Instance = AsgiHttpService;
 
     fn new_service(&self) -> Result<Self::Instance, std::io::Error> {
-        Ok(AsgiHttpService { reply_pump: self.reply_pump.clone() })
+        Ok(AsgiHttpService {
+            reply_pump: self.reply_pump.clone(),
+            channel_pool: self.channel_pool.clone(),
+        })
     }
 }
 
 
 pub struct AsgiHttpService {
     reply_pump: ReplyPump<RedisChannelLayer>,
+    channel_pool: r2d2::Pool<RedisChannelLayerManager>,
 }
 
 impl Service for AsgiHttpService {
@@ -56,6 +77,7 @@ impl Service for AsgiHttpService {
         let cpu_pool = CpuPool::new(4);
 
         let reply_pump = self.reply_pump.clone();
+        let channel_pool = self.channel_pool.clone();
 
         // We chain a series of futures together in order to handle the request/response async.
         // We don't actually care about the errors of the individual stages, as we'll return a
@@ -78,8 +100,10 @@ impl Service for AsgiHttpService {
             // Send our body down the channel. To keep the code simple we do this in one
             // synchronous operation on the thread-pool.
             .and_then(move |body| {
-                cpu_pool.spawn_fn(move || send_request_sync(method, uri, version, headers, body))
-                    .map_err(|_| ())
+                cpu_pool.spawn_fn(move || {
+                    send_request_sync(channel_pool, method, uri, version, headers, body)
+                })
+                .map_err(|_| ())
             })
             .map_err(|_| ())
             // We wait for the initial response on the request's reply channel. We'll wait for
@@ -105,14 +129,15 @@ impl Service for AsgiHttpService {
 }
 
 
-fn send_request_sync(method: Method,
+fn send_request_sync(channel_pool: r2d2::Pool<RedisChannelLayerManager>,
+                     method: Method,
                      uri: Uri,
                      version: HttpVersion,
                      headers: Headers,
                      body: Vec<u8>)
                      -> Result<String, RedisChannelError> {
-    // TODO: Pull this from a pool.
-    let channels = RedisChannelLayer::new();
+    // TODO: Propogate error to give a 503.
+    let channels = channel_pool.get().unwrap();
 
     // If the body of the request is over a certain size, then we must break it up and send each
     // chunk separately on a per request http.request.body? channel.

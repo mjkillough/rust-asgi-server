@@ -2,6 +2,7 @@ extern crate crossbeam;
 extern crate futures_cpupool;
 extern crate futures;
 extern crate hyper;
+extern crate r2d2;
 extern crate rand;
 extern crate redis;
 extern crate rmp_serde;

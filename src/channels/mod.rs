@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod redis;
 pub mod reply_pump;
-pub use self::redis::{RedisChannelLayer, RedisChannelError};
+pub use self::redis::{RedisChannelError, RedisChannelLayer, RedisChannelLayerManager};
 pub use self::reply_pump::ReplyPump;
 
 
