@@ -1,4 +1,6 @@
-use std;
+use std::error::Error;
+
+use r2d2;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 
@@ -22,8 +24,11 @@ pub struct ChannelReply {
 }
 
 
-pub trait ChannelLayer {
-    type Error: std::error::Error;
+pub trait ChannelLayer
+    where Self: 'static + Send + Sized
+{
+    type Error: Error + Send;
+    type Manager: r2d2::ManageConnection<Connection = Self>;
 
     fn send<S: Serialize>(&self, channel: &str, msg: &S) -> Result<(), Self::Error>;
     fn receive<'a, I>(&self,

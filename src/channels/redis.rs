@@ -151,6 +151,7 @@ impl RedisChannelLayer {
 
 impl ChannelLayer for RedisChannelLayer {
     type Error = RedisChannelError;
+    type Manager = RedisChannelLayerManager;
 
     fn send<S: Serialize>(&self, channel: &str, msg: &S) -> Result<(), Self::Error> {
         let message_key = self.prefix.to_owned() + "msg:" + &random_string(10);
@@ -259,7 +260,7 @@ impl r2d2::ManageConnection for RedisChannelLayerManager {
         Ok(redis::cmd("PING").query(&channel_layer.conn)?)
     }
 
-    fn has_broken(&self, conn: &mut Self::Connection) -> bool {
+    fn has_broken(&self, _: &mut Self::Connection) -> bool {
         false
     }
 }

@@ -5,16 +5,20 @@ use futures;
 use futures::{Async, BoxFuture, Future, Poll, Stream};
 
 use msgs;
-use channels::{RedisChannelLayer, ReplyPump};
+use channels::{ChannelLayer, ReplyPump};
 
 
-pub enum BodyStream {
+pub enum BodyStream<C>
+    where C: ChannelLayer
+{
     Error(ErrorBodyStream),
-    Response(ResponseBodyStream),
+    Response(ResponseBodyStream<C>),
 }
 
-impl BodyStream {
-    pub fn response(pump: ReplyPump<RedisChannelLayer>,
+impl<C> BodyStream<C>
+    where C: ChannelLayer
+{
+    pub fn response(pump: ReplyPump<C>,
                     channel: String,
                     initial_chunk: msgs::http::ResponseBodyChunk)
                     -> Self {
@@ -30,7 +34,9 @@ impl BodyStream {
     }
 }
 
-impl Stream for BodyStream {
+impl<C> Stream for BodyStream<C>
+    where C: ChannelLayer
+{
     type Item = Vec<u8>;
     type Error = hyper::Error;
 
@@ -58,13 +64,17 @@ impl Stream for ErrorBodyStream {
 }
 
 
-pub struct ResponseBodyStream {
-    pump: ReplyPump<RedisChannelLayer>,
+pub struct ResponseBodyStream<C>
+    where C: ChannelLayer
+{
+    pump: ReplyPump<C>,
     channel: String,
     future: Option<BoxFuture<msgs::http::ResponseBodyChunk, ()>>,
 }
 
-impl Stream for ResponseBodyStream {
+impl<C> Stream for ResponseBodyStream<C>
+    where C: ChannelLayer
+{
     type Item = Vec<u8>;
     type Error = hyper::Error;
 
