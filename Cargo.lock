@@ -10,7 +10,7 @@ dependencies = [
  "rand 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "redis 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rmp 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "rmp-serde 0.12.0 (git+https://github.com/3Hren/msgpack-rust.git)",
+ "rmp-serde 0.12.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 0.9.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 0.9.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -246,8 +246,8 @@ dependencies = [
 
 [[package]]
 name = "rmp-serde"
-version = "0.12.0"
-source = "git+https://github.com/3Hren/msgpack-rust.git#7289608764e3164c5cb09e0c4bf6f44c0d9bf4e8"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "byteorder 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rmp 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -455,7 +455,7 @@ dependencies = [
 "checksum redox_syscall 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)" = "8dd35cc9a8bdec562c757e3d43c1526b5c6d2653e23e2315065bc25556550753"
 "checksum relay 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "f301bafeb60867c85170031bdb2fcf24c8041f33aee09e7b116a58d4e9f781c5"
 "checksum rmp 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)" = "5a930e81dd6ccc8f8c9cbcd7a622ee4b2aef614781be9b75feaeeea1efbbd96e"
-"checksum rmp-serde 0.12.0 (git+https://github.com/3Hren/msgpack-rust.git)" = "<none>"
+"checksum rmp-serde 0.12.2 (registry+https://github.com/rust-lang/crates.io-index)" = "06ec4d0cdea2645de5d0e649f90c3e654205d913e14adefa452257314a24e76e"
 "checksum rustc_version 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "c5f5376ea5e30ce23c03eb77cbe4962b988deead10910c372b226388b594c084"
 "checksum scoped-tls 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "f417c22df063e9450888a7561788e9bd46d3bb3c1466435b4eccb903807f147d"
 "checksum semver 0.1.20 (registry+https://github.com/rust-lang/crates.io-index)" = "d4f410fedcf71af0345d7607d246e7ad15faaadd49d240ee3b24e5dc21a820ac"
