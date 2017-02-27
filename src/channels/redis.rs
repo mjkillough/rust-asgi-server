@@ -12,7 +12,7 @@ use rmp_serde;
 use serde;
 use serde::{Deserialize, Serialize};
 
-use super::{random_string, shuffle, ChannelError, ChannelLayer, ChannelReply};
+use super::{random_string, shuffle, validate_channel_name, ChannelError, ChannelLayer, ChannelReply};
 
 
 // asgi_redis expects msgpack map objects, which it'll deserialize to Python dicts.
@@ -98,6 +98,8 @@ impl ChannelLayer for RedisChannelLayer {
     type Manager = RedisChannelLayerManager;
 
     fn send<S: Serialize>(&self, channel: &str, msg: &S) -> Result<(), ChannelError> {
+        validate_channel_name(channel)?;
+
         let message_key = self.prefix.to_owned() + "msg:" + &random_string(10);
         let channel_key = self.prefix.to_owned() + channel;
 
@@ -121,6 +123,12 @@ impl ChannelLayer for RedisChannelLayer {
                       -> Result<Option<(String, ChannelReply)>, ChannelError>
         where I: Iterator<Item = &'a String> + Clone
     {
+        let valid_channel_names: Result<Vec<()>, ChannelError> = channels.clone()
+            .map(String::as_ref)
+            .map(validate_channel_name)
+            .collect();
+        valid_channel_names?;
+
         loop {
             let mut channels: Vec<String> = channels.clone()
                 .map(|channel| self.prefix.to_owned() + &channel)
@@ -172,7 +180,11 @@ impl ChannelLayer for RedisChannelLayer {
     }
 
     fn new_channel(&self, pattern: &str) -> Result<String, ChannelError> {
-        // TODO: Check pattern ends in ! or ?
+        validate_channel_name(pattern)?;
+        if !pattern.ends_with("!") && !pattern.ends_with("?") {
+            return Err(ChannelError::InvalidChannelName);
+        }
+
         // TODO: Check the new channel doesn't already exist.
         Ok(pattern.to_owned() + &random_string(10))
     }

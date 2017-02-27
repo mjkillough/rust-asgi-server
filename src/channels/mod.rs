@@ -1,4 +1,5 @@
 use std;
+use std::ascii::AsciiExt;
 use std::error::Error;
 
 use r2d2;
@@ -17,6 +18,23 @@ fn random_string(n: usize) -> String {
 
 fn shuffle<T>(values: &mut [T]) {
     thread_rng().shuffle(values)
+}
+
+fn is_valid_channel_name(name: &str) -> bool {
+    let too_long = name.len() >= 100;
+    let invalid_chars = name.chars().all(|c| {
+        c.is_ascii() &&
+        (c.is_alphanumeric() || ".-_?!".contains(c))
+    });
+    too_long || invalid_chars
+}
+
+fn validate_channel_name(name: &str) -> Result<(), ChannelError> {
+    if is_valid_channel_name(name) {
+        Ok(())
+    } else {
+        Err(ChannelError::InvalidChannelName)
+    }
 }
 
 
@@ -90,5 +108,30 @@ impl Error for ChannelError {
             ChannelError::Serialize(ref err) => err.cause(),
             ChannelError::Deserialize(ref err) => err.cause(),
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_valid_channel_name, validate_channel_name,
+    };
+
+    #[test]
+    fn test_is_valid_channel_name() {
+        assert_eq!(is_valid_channel_name("http.request"), true);
+        assert_eq!(is_valid_channel_name("http.request!aS45543"), true);
+        assert_eq!(is_valid_channel_name("http.response.body?aS45543"), true);
+        assert_eq!(is_valid_channel_name("aA1!?-_."), true);
+
+        assert_eq!(is_valid_channel_name("@"), false);
+        assert_eq!(is_valid_channel_name("☃"), false);
+    }
+
+    #[test]
+    fn test_validate_channel_name() {
+        assert!(validate_channel_name("http.request").is_ok());
+        assert!(validate_channel_name("@").is_err());
     }
 }
