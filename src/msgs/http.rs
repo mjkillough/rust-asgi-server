@@ -12,7 +12,7 @@ pub struct Request<'a> {
     pub path: &'a str,
     pub query_string: &'a str,
     /* pub root_path: String, */
-    // It'd be nice if headers didn't have to own their byte-strings.
+    // It'd be nice if headers didn't have to own their byte-strings. See #5.
     pub headers: Vec<(ByteBuf, ByteBuf)>,
     pub body: Bytes<'a>,
     pub body_channel: Option<&'a str>,
