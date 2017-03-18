@@ -147,6 +147,19 @@ impl<C> Service for AsgiHttpService<C>
 }
 
 
+/// Creates a list of [header_name, value] tuples, where header_name is lower-cased.
+/// If the same header is present multiple times, then it should be multiple tuples.
+fn format_headers(headers: Headers) -> Vec<(ByteBuf, ByteBuf)> {
+    headers.iter()
+        .map(|header| {
+                 let name = header.name().to_lowercase().into_bytes();
+                 let value = header.value_string().into_bytes();
+                 (ByteBuf::from(name), ByteBuf::from(value))
+             })
+        .collect()
+}
+
+
 fn send_request_sync<C>(channel_pool: r2d2::Pool<C::Manager>,
                         method: Method,
                         uri: Uri,
@@ -179,14 +192,7 @@ fn send_request_sync<C>(channel_pool: r2d2::Pool<C::Manager>,
         _ => panic!("Unsupported HTTP version"),
     };
 
-    // Lower-case the header names (as per ASGI spec) and convert to UTF-8 byte strings.
-    let headers: Vec<(ByteBuf, ByteBuf)> = headers.iter()
-        .map(|header| {
-                 let name = header.name().to_lowercase().into_bytes();
-                 let value = header.value_string().into_bytes();
-                 (ByteBuf::from(name), ByteBuf::from(value))
-             })
-        .collect();
+    let headers = format_headers(headers);
 
     let client = remote_addr.map(|addr| (format!("{}", addr.ip()), addr.port()));
     let server = (format!("{}", local_addr.ip()), local_addr.port());
@@ -265,4 +271,35 @@ fn error_response<C>(status: StatusCode, body: &str) -> Response<BodyStream<C>>
                                       SubLevel::Html,
                                       vec![(Attr::Charset, Value::Utf8)])))
         .with_body(BodyStream::error(body))
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::format_headers;
+
+    use hyper::Headers;
+    use serde::bytes::ByteBuf;
+
+    #[test]
+    fn format_headers_single_values() {
+        let mut headers = Headers::new();
+        headers.set_raw("foo", "one");
+        let formatted_headers = format_headers(headers);
+        let expected_headers = vec![(ByteBuf::from("foo".as_bytes()),
+                                     ByteBuf::from("one".as_bytes()))];
+        assert_eq!(formatted_headers, expected_headers);
+    }
+    #[test]
+    fn format_headers_multiple_values() {
+        let mut headers = Headers::new();
+        headers.append_raw("foo", "one");
+        headers.append_raw("foo", "two");
+        let formatted_headers = format_headers(headers);
+        let expected_headers = vec![(ByteBuf::from("foo".as_bytes()),
+                                     ByteBuf::from("one".as_bytes())),
+                                    (ByteBuf::from("foo".as_bytes()),
+                                     ByteBuf::from("two".as_bytes())),];
+        assert_eq!(formatted_headers, expected_headers);
+    }
 }
