@@ -1,5 +1,6 @@
 use std;
 use std::clone::Clone;
+use std::net::SocketAddr;
 
 use futures_cpupool::CpuPool;
 use futures;
@@ -21,6 +22,7 @@ use msgs;
 pub struct AsgiHttpServiceFactory<C>
     where C: ChannelLayer
 {
+    addr: SocketAddr,
     reply_pump: ReplyPump<C>,
     channel_pool: r2d2::Pool<C::Manager>,
 }
@@ -28,7 +30,7 @@ pub struct AsgiHttpServiceFactory<C>
 impl<C> AsgiHttpServiceFactory<C>
     where C: ChannelLayer
 {
-    pub fn new() -> AsgiHttpServiceFactory<RedisChannelLayer> {
+    pub fn new(addr: &SocketAddr) -> AsgiHttpServiceFactory<RedisChannelLayer> {
         let connection_info = "redis://127.0.0.1";
 
         // Make a ReplyPump with its own dedicated channel layer.
@@ -43,6 +45,7 @@ impl<C> AsgiHttpServiceFactory<C>
         let pool = r2d2::Pool::new(config, manager).unwrap();
 
         AsgiHttpServiceFactory {
+            addr: addr.clone(),
             reply_pump: reply_pump,
             channel_pool: pool,
         }
@@ -59,9 +62,10 @@ impl<C> NewService for AsgiHttpServiceFactory<C>
 
     fn new_service(&self) -> Result<Self::Instance, std::io::Error> {
         Ok(AsgiHttpService {
-            reply_pump: self.reply_pump.clone(),
-            channel_pool: self.channel_pool.clone(),
-        })
+               addr: self.addr.clone(),
+               reply_pump: self.reply_pump.clone(),
+               channel_pool: self.channel_pool.clone(),
+           })
     }
 }
 
@@ -69,6 +73,7 @@ impl<C> NewService for AsgiHttpServiceFactory<C>
 pub struct AsgiHttpService<C>
     where C: ChannelLayer
 {
+    addr: SocketAddr,
     reply_pump: ReplyPump<C>,
     channel_pool: r2d2::Pool<C::Manager>,
 }
@@ -82,11 +87,13 @@ impl<C> Service for AsgiHttpService<C>
     type Future = BoxFuture<Self::Response, Self::Error>;
 
     fn call(&self, req: Request) -> Self::Future {
+        let remote_addr = req.remote_addr().map(|a| a.clone());
         let (method, uri, version, headers, body) = req.deconstruct();
         let cpu_pool = CpuPool::new(4);
 
         let reply_pump = self.reply_pump.clone();
         let channel_pool: r2d2::Pool<C::Manager> = self.channel_pool.clone();
+        let local_addr = self.addr.clone();
 
         // We chain a series of futures together in order to handle the request/response async.
         // We don't actually care about the errors of the individual stages, as we'll return a
@@ -110,7 +117,9 @@ impl<C> Service for AsgiHttpService<C>
             // synchronous operation on the thread-pool.
             .and_then(move |body| {
                 cpu_pool.spawn_fn(move || {
-                    send_request_sync::<C>(channel_pool, method, uri, version, headers, body)
+                    send_request_sync::<C>(
+                        channel_pool, method, uri, version, headers, body,
+                        remote_addr, &local_addr)
                 })
                 .map_err(|_| ())
             })
@@ -143,7 +152,9 @@ fn send_request_sync<C>(channel_pool: r2d2::Pool<C::Manager>,
                         uri: Uri,
                         version: HttpVersion,
                         headers: Headers,
-                        body: Vec<u8>)
+                        body: Vec<u8>,
+                        remote_addr: Option<SocketAddr>,
+                        local_addr: &SocketAddr)
                         -> Result<String, ChannelError>
     where C: ChannelLayer
 {
@@ -171,28 +182,34 @@ fn send_request_sync<C>(channel_pool: r2d2::Pool<C::Manager>,
     // Lower-case the header names (as per ASGI spec) and convert to UTF-8 byte strings.
     let headers: Vec<(ByteBuf, ByteBuf)> = headers.iter()
         .map(|header| {
-            let name = header.name().to_lowercase().into_bytes();
-            let value = header.value_string().into_bytes();
-            (ByteBuf::from(name), ByteBuf::from(value))
-        })
+                 let name = header.name().to_lowercase().into_bytes();
+                 let value = header.value_string().into_bytes();
+                 (ByteBuf::from(name), ByteBuf::from(value))
+             })
         .collect();
+
+    let client = remote_addr.map(|addr| (format!("{}", addr.ip()), addr.port()));
+    let server = (format!("{}", local_addr.ip()), local_addr.port());
 
     // Send the initial chunk of the request to http.request. We must use an extra scope for this
     // because otherwise we'll find reply_channel is borrowed for longer than necessary.
     let reply_channel = channels.new_channel("http.response!")?;
     {
         channels.send("http.request",
-                  &msgs::http::Request {
-                      reply_channel: &reply_channel,
-                      http_version: &version,
-                      method: method.as_ref(),
-                      path: uri.path(),
-                      query_string: uri.query().unwrap_or(""),
-                      headers: headers,
-                      body: Bytes::from(initial_chunk),
-                      // Dance to turn Option<String> to Option<&str>:
-                      body_channel: body_channel.as_ref().map(String::as_ref),
-                  })?;
+                      &msgs::http::Request {
+                           reply_channel: &reply_channel,
+                           http_version: &version,
+                           method: method.as_ref(),
+                           scheme: uri.scheme().unwrap_or("http"),
+                           path: uri.path(),
+                           query_string: uri.query().unwrap_or(""),
+                           headers: headers,
+                           body: Bytes::from(initial_chunk),
+                           // Dance to turn Option<String> to Option<&str>:
+                           body_channel: body_channel.as_ref().map(String::as_ref),
+                           client: client,
+                           server: server,
+                       })?;
     }
 
     // If we have more than one chunk, send each in a separate message down the body_channel.
@@ -202,11 +219,11 @@ fn send_request_sync<C>(channel_pool: r2d2::Pool<C::Manager>,
             match chunks.next() {
                 Some(chunk) => {
                     channels.send(&body_channel,
-                              &msgs::http::RequestBodyChunk {
-                                  content: Bytes::from(chunk),
-                                  closed: false,
-                                  more_content: !chunks.peek().is_none(),
-                              })?
+                                  &msgs::http::RequestBodyChunk {
+                                       content: Bytes::from(chunk),
+                                       closed: false,
+                                       more_content: !chunks.peek().is_none(),
+                                   })?
                 }
                 None => break,
             }
