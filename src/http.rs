@@ -150,13 +150,18 @@ impl<C> Service for AsgiHttpService<C>
 /// Creates a list of [header_name, value] tuples, where header_name is lower-cased.
 /// If the same header is present multiple times, then it should be multiple tuples.
 fn format_headers(headers: Headers) -> Vec<(ByteBuf, ByteBuf)> {
-    headers.iter()
-        .map(|header| {
-                 let name = header.name().to_lowercase().into_bytes();
-                 let value = header.value_string().into_bytes();
-                 (ByteBuf::from(name), ByteBuf::from(value))
-             })
-        .collect()
+    let mut formatted_headers: Vec<(ByteBuf, ByteBuf)> = Vec::new();
+    for header in headers.iter() {
+        // This will get slightly nicer if/when Hyper #1095 is accepted.
+        let lowercased_name = header.name().to_lowercase();
+        if let Some(values) = headers.get_raw(header.name()) {
+            for value in values.iter() {
+                formatted_headers.push((ByteBuf::from(lowercased_name.clone().into_bytes()),
+                                        ByteBuf::from(value)));
+            }
+        }
+    }
+    formatted_headers
 }
 
 
@@ -296,10 +301,9 @@ mod tests {
         headers.append_raw("foo", "one");
         headers.append_raw("foo", "two");
         let formatted_headers = format_headers(headers);
-        let expected_headers = vec![(ByteBuf::from("foo".as_bytes()),
-                                     ByteBuf::from("one".as_bytes())),
-                                    (ByteBuf::from("foo".as_bytes()),
-                                     ByteBuf::from("two".as_bytes())),];
+        let expected_headers =
+            vec![(ByteBuf::from("foo".as_bytes()), ByteBuf::from("one".as_bytes())),
+                 (ByteBuf::from("foo".as_bytes()), ByteBuf::from("two".as_bytes()))];
         assert_eq!(formatted_headers, expected_headers);
     }
 }
